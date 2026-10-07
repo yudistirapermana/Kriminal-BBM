@@ -2,7 +2,7 @@
 
 Untuk setiap putusan dicari kata kunci di sumber terkuat yang tersedia:
 1. teks PDF putusan itu sendiri (diunduh dari Direktori Putusan MA);
-2. kutipan verbatim di kolom bukti_kutipan;
+2. kutipan verbatim di kolom bukti_kutipan (kecuali baris tabulasi tim, yang kolomnya berisi sel spreadsheet);
 3. teks PDF putusan lain dalam rantai perkara yang sama (fakta perkara sama);
 4. kolom yang ditulis pengode (barang_bbm, rincian_amar, catatan) - bukti terlemah.
 Dengan --online, halaman overview dan PDF di situs MA diambil ulang lewat url_putusan.
@@ -59,20 +59,26 @@ def evidence_table(rekap: pd.DataFrame, data_dir: str | Path, text_cache: str | 
     for _, r in rekap.iterrows():
         own = r["file_pdf"] if not is_na(r["file_pdf"]) and (data_dir / str(r["file_pdf"])).exists() else None
         pdf_h = keyword_hits(text_of(own)) if own else None
-        quote_h = keyword_hits(str(r["bukti_kutipan"]) if not is_na(r["bukti_kutipan"]) else "")
+        quotes = str(r["bukti_kutipan"]) if not is_na(r["bukti_kutipan"]) else ""
+        # Baris tabulasi tim: bukti_kutipan berisi sel spreadsheet tim, bukan kutipan teks putusan.
+        is_tab = str(r.get("sumber_daftar", "")).startswith("Tabulasi")
+        quote_h = {} if is_tab else keyword_hits(quotes)
         sib_h: dict[str, int] = {}
         sibs = rekap[(rekap["rantai_perkara"] == r["rantai_perkara"]) & (rekap["no"] != r["no"])]
         for fp in sibs["file_pdf"].dropna():
             if (data_dir / fp).exists():
                 for k, v in keyword_hits(text_of(fp)).items():
                     sib_h[k] = sib_h.get(k, 0) + v
-        coder_h = keyword_hits(" ".join(str(r[c]) for c in CODER_FIELDS if c in r and not is_na(r[c])))
+        coder_text = " ".join(str(r[c]) for c in CODER_FIELDS if c in r and not is_na(r[c]))
+        coder_h = keyword_hits(coder_text + (" " + quotes if is_tab else ""))
         if pdf_h is not None:
             basis, hits = "teks PDF putusan", pdf_h
         elif quote_h:
             basis, hits = "kutipan verbatim (bukti_kutipan)", quote_h
         elif sib_h:
             basis, hits = "teks PDF putusan lain dalam rantai", sib_h
+        elif coder_h and is_tab:
+            basis, hits = "tabulasi tim (bukan teks putusan)", coder_h
         elif coder_h:
             basis, hits = "kolom isian pengode saja", coder_h
         else:

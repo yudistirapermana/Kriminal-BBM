@@ -46,3 +46,5 @@ def test_every_rekap_row_has_keyword_evidence():
     ev = evidence_table(load_rekap(REKAP), DATA, TEXT_CACHE_DIR)
     assert len(ev) == 166
     assert (ev["dasar_bukti_kata_kunci"] != "tidak ada").all()
+    tab = load_rekap(REKAP)["sumber_daftar"].str.startswith("Tabulasi")
+    assert (ev.loc[tab.values, "dasar_bukti_kata_kunci"] == "tabulasi tim (bukan teks putusan)").all()

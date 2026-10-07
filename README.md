@@ -11,6 +11,7 @@ tahun putusan, tahun kejadian, tingkat persidangan, hasil putusan, jenis BBM, ni
 Data Kriminal BBM/
   rekap_putusan_kriminalitas_BBM_2020-2026.csv   rekap utama (166 putusan, 107 rantai perkara)
   putusan_dikeluarkan_tidak_relevan.csv          35 putusan yang dikeluarkan (bukan BBM) + alasannya
+  kurasi_kata_kunci_tinjauan.csv                  hasil kurasi kata kunci per putusan (lihat laporan_kurasi_kata_kunci.md)
   BACA_SAYA_metodologi.txt                        cakupan, definisi kolom, keterbatasan
   pdf/                                            87 PDF putusan
   hasil_olahan/                                   keluaran kode (dibuat ulang otomatis, jangan disunting)
@@ -44,6 +45,7 @@ Semua perintah dijalankan dari akar repositori: `python -m kriminal_bbm <perinta
 | `pdf-text` | Menulis teks bersih PDF (tanpa watermark, kop dan disclaimer) ke `cache/teks_bersih/`. |
 | `check-site` | Uji cepat parser terhadap situs MA: 1 halaman daftar + 1 halaman overview. Jalankan ini sebelum `crawl`. |
 | `crawl` | Menelusuri direktori: daftar klasifikasi → overview → "Putusan Terkait" → unduh PDF. |
+| `curate` | Kurasi kata kunci BBM/solar/biosolar/minyak tanah/pertalite: bukti kata kunci per putusan dari teks PDF, kutipan verbatim, PDF rantai, atau isian tim (`--online` mengecek ulang ke situs MA). `--terapkan` memindahkan baris berstatus `final = no` di `kurasi_kata_kunci_tinjauan.csv` ke daftar dikeluarkan. Hasil kurasi 7 Oktober 2026: 166/166 dipertahankan, lihat `Data Kriminal BBM/laporan_kurasi_kata_kunci.md`. |
 | `llm-code` | (Opsional) Mengodekan tujuh kolom dari PDF baru dengan Claude API, memakai protokol yang sama dengan rekap. |
 
 ### Memperbarui hasil olahan setelah rekap disunting

@@ -11,6 +11,8 @@ ISI FOLDER
   putusan yang dikeluarkan.
 - hasil_olahan/ : keluaran kode (laporan validasi, kandidat dari teks PDF, dataset tingkat perkara, tabel ringkasan).
   Jangan disunting manual; buat ulang dengan `python -m kriminal_bbm validate` lalu `python -m kriminal_bbm analyze`.
+- kurasi_kata_kunci_tinjauan.csv dan laporan_kurasi_kata_kunci.md : hasil kurasi kata kunci
+  (BBM/solar/biosolar/minyak tanah/pertalite) per putusan, 7 Oktober 2026.
 - BACA_SAYA_metodologi.txt : berkas ini.
 
 CAKUPAN DAN CARA PENELUSURAN
@@ -88,3 +90,15 @@ DATASET TINGKAT PERKARA (hasil_olahan/rekap_perkara_unik.csv)
 - pasal_uu_migas: pasal UU 22/2001 (53a-d, 54, 55) yang disebut di rincian_amar/catatan.
 - kelompok_kejadian: rantai dari pengadilan yang sama, selisih tahun putusan <= 2, dengan volume sama atau menyebut
   kapal/perusahaan yang sama. Heuristik; alasan pengelompokan ada di kolom dasar_kelompok.
+
+KURASI KATA KUNCI (7 Oktober 2026)
+- Setiap putusan di rekap (166) dan di daftar dikeluarkan (35) diperiksa terhadap kata kunci BBM / solar / biosolar /
+  minyak tanah / pertalite. Frasa "bahan bakar minyak" dihitung sebagai BBM. Putusan dinyatakan berhubungan bila BBM
+  kata kunci adalah objek perkara, bukan sekadar disebut (mis. solar untuk alat tambang).
+- Situs MA tidak dapat diakses dari lingkungan kurasi, sehingga kata kunci diuji pada teks PDF putusan (diunduh dari situs),
+  kutipan verbatim di bukti_kutipan, atau PDF putusan lain dalam rantai yang sama. Penilaian dilakukan oleh agen AI
+  peninjau dan diverifikasi; rinciannya ada di laporan_kurasi_kata_kunci.md.
+- Hasil: 166 dari 166 putusan rekap berhubungan dengan kata kunci, jadi tidak ada baris yang dikeluarkan. 31 putusan di
+  daftar dikeluarkan tetap dikeluarkan dan 4 tidak dapat dinilai karena tanpa teks.
+- 52 baris ditandai perlu_cek_situs: 46 baris tabulasi tim (tanpa URL/PDF) dan 6 baris yang hanya memuat frasa lengkap
+  "bahan bakar minyak". Cek ulang ke situs: python -m kriminal_bbm curate --online.
