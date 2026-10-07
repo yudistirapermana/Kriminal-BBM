@@ -155,6 +155,43 @@ def cmd_analyze(a):
     print(f"{len(res['decisions'])} putusan unik, {len(res['cases'])} perkara. Hasil di {a.out_dir}")
 
 
+def cmd_curate(a):
+    from .curate import apply_review, evidence_table, online_check, read_raw, write_raw
+    from .validate import load_rekap
+
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    rekap = load_rekap(a.rekap)
+    ev = evidence_table(rekap, Path(a.rekap).parent, config.TEXT_CACHE_DIR)
+    if a.online:
+        from .web import PoliteSession
+        s = PoliteSession(config.HTML_CACHE_DIR, delay=a.jeda)
+        on = online_check(rekap, s, config.RAW_DIR / "pdf_kurasi", config.TEXT_CACHE_DIR)
+        ev = ev.merge(on, on=["no", "nomor_putusan"], how="left")
+    ev.to_csv(out / "kurasi_kata_kunci_bukti.csv", index=False, encoding="utf-8-sig")
+    print(ev["dasar_bukti_kata_kunci"].value_counts().to_string())
+    print(f"Tanpa kata kunci di sumber mana pun: {(ev['dasar_bukti_kata_kunci'] == 'tidak ada').sum()} baris")
+
+    if not Path(a.tinjauan).exists():
+        print(f"Berkas tinjauan {a.tinjauan} tidak ada; hanya bukti kata kunci yang ditulis.")
+        return 0
+    review = pd.read_csv(a.tinjauan)
+    rv = review[review["dataset"] == "rekap"]
+    print(f"Tinjauan: {rv['final'].value_counts().to_dict()} (rekap); "
+          f"kandidat pemulihan dari daftar dikeluarkan: {int((review['final'].eq('yes') & review['dataset'].eq('dikeluarkan')).sum())}")
+    if not a.terapkan:
+        print("Gunakan --terapkan untuk mengeluarkan baris final=no dari rekap.")
+        return 0
+    kept, excluded_new, removed = apply_review(read_raw(a.rekap), read_raw(a.dikeluarkan), rv, a.tanggal)
+    if removed.empty:
+        print("Tidak ada baris yang dikeluarkan; berkas rekap tidak diubah.")
+        return 0
+    write_raw(kept, a.rekap)
+    write_raw(excluded_new, a.dikeluarkan)
+    print(f"{len(removed)} baris dikeluarkan: {', '.join(removed['nomor_putusan'])}. Rekap kini {len(kept)} baris.")
+    return 0
+
+
 def cmd_llm_code(a):
     try:
         import anthropic
@@ -230,6 +267,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--rekap", default=str(config.REKAP_CSV))
     s.add_argument("--out-dir", default=str(config.OUTPUT_DIR))
     s.set_defaults(func=cmd_analyze)
+
+    s = sub.add_parser("curate", help="kurasi kata kunci BBM/solar/biosolar/minyak tanah/pertalite")
+    s.add_argument("--rekap", default=str(config.REKAP_CSV))
+    s.add_argument("--dikeluarkan", default=str(config.EXCLUDED_CSV))
+    s.add_argument("--tinjauan", default=str(config.DATA_DIR / "kurasi_kata_kunci_tinjauan.csv"),
+                   help="berkas keputusan tinjauan (kolom dataset, no, final, alasan)")
+    s.add_argument("--online", action="store_true", help="cek ulang overview + PDF di situs MA lewat url_putusan")
+    s.add_argument("--jeda", type=float, default=3.0)
+    s.add_argument("--terapkan", action="store_true", help="keluarkan baris final=no dari rekap")
+    s.add_argument("--tanggal", default="7 Oktober 2026", help="tanggal kurasi untuk kolom alasan")
+    s.add_argument("--out-dir", default=str(config.OUTPUT_DIR))
+    s.set_defaults(func=cmd_curate)
 
     s = sub.add_parser("llm-code", help="(opsional) kodekan tujuh kolom dengan Claude API")
     s.add_argument("files", nargs="*")
