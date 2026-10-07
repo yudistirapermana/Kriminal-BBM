@@ -1,0 +1,51 @@
+REKAP PUTUSAN KRIMINALITAS BBM 2020-2026 (Direktori Putusan Mahkamah Agung)
+Kajian UGM - PT SICPA | Data diambil: 7 Oktober 2026 | Sumber: https://putusan3.mahkamahagung.go.id
+
+ISI FOLDER
+- rekap_putusan_kriminalitas_BBM_2020-2026.csv : 155 baris, satu baris = satu putusan (UTF-8, pemisah koma).
+- pdf/ : 87 berkas PDF putusan (lampiran "Download PDF" di Direktori Putusan).
+- BACA_SAYA_metodologi.txt : berkas ini.
+
+CAKUPAN DAN CARA PENELUSURAN
+1. Semua putusan pada klasifikasi Pidana Khusus > Migas dengan tahun putus 2020-2026 (84 putusan).
+2. Semua putusan lain dalam rantai perkara yang sama (PN -> PT -> MA, tautan "Putusan Terkait") yang diputus 2020-2026.
+   Banyak di antaranya diklasifikasikan "Pidana Khusus Lain-lain", "Lingkungan Hidup", dll.
+Total: 155 putusan dalam 80 rantai perkara. Per tahun putusan: 2020: 58, 2021: 26, 2022: 24, 2023: 40, 2024: 6, 2025: 1.
+Per tingkat: MA: 63, PN: 57, PT: 34, Pengadilan Militer: 1. Sumber data: Overview: 68, PDF: 87.
+Relevansi BBM: NA: 4, Sebagian: 7, Tidak: 24, Ya: 120 (Ya = objek BBM; Sebagian = minyak mentah/kondensat/pengeboran ilegal; Tidak = LPG/gas/non-BBM).
+
+KETERBATASAN PENTING
+- Pencarian kata kunci (BBM, biosolar, solar, pertalite, minyak tanah, dst.) di situs MA kini mewajibkan verifikasi
+  CAPTCHA "Saya bukan robot" pada setiap sesi, sehingga tidak dapat dijalankan secara otomatis. Dataset ini karenanya
+  dibangun dari jalur Direktori (klasifikasi Migas + rantai perkaranya), BUKAN dari hasil pencarian kata kunci.
+- Cuplikan halaman hasil pencarian situs MA di indeks mesin pencari (tanggal cuplikan tidak diketahui) menunjukkan ratusan
+  hingga ribuan putusan per kata kunci (mis. "pertalite" sekitar 1.698 data, "BBM jenis premium" sekitar 976 data,
+  "BBM subsidi" sekitar 708 data). Sebagian besar perkara BBM diklasifikasikan di luar
+  "Migas" (umumnya "Pidana Khusus Lain-lain"), sehingga dataset ini adalah SAMPEL, bukan populasi lengkap.
+- Satu perkara dapat muncul di beberapa baris (PN, PT, MA). Gunakan kolom rantai_perkara untuk menghitung perkara unik.
+- Klasifikasi Migas juga memuat perkara non-BBM (LPG, gas, pertambangan); saring dengan kolom relevan_bbm.
+
+DEFINISI KOLOM UTAMA (7 kolom permintaan)
+1. tahun_putusan        : tahun putusan dibacakan.
+2. tahun_kejadian       : tahun perbuatan pidana menurut dakwaan/fakta hukum ("2020-2021" bila lintas tahun).
+3. tingkat_persidangan  : PN (pertama), PT (banding), MA (kasasi/PK), atau Pengadilan Militer.
+4. hasil_putusan        : status terdakwa setelah putusan tersebut: Bersalah / Tidak bersalah (bebas atau lepas).
+                          Untuk MA: kasasi terdakwa ditolak = Bersalah (putusan pemidanaan tetap berlaku).
+5. barang_bbm           : jenis bahan bakar objek perkara (Solar/Biosolar, Pertalite, Premium, Minyak tanah, dst.).
+6. nilai_kerugian_uang  : angka (tanpa pemisah ribuan) + kolom mata_uang + kolom dasar_nilai_uang. Urutan prioritas:
+                          (a) kerugian negara yang disebut putusan; (b) selisih harga subsidi x volume bila kedua harga disebut;
+                          (c) nilai BBM yang disebut putusan; (d) volume x harga per liter yang disebut putusan (dihitung);
+                          (e) NA. Denda dan biaya perkara BUKAN kerugian. "Kerugian negara" eksplisit jarang disebut, sehingga
+                          kebanyakan nilai adalah nilai BBM objek perkara. Selalu baca kolom dasar_nilai_uang.
+7. nilai_kerugian_volume: total volume BBM objek perkara (angka) + satuan_volume + keterangan_volume.
+Kolom pendukung: nomor_putusan, pengadilan, tingkat_proses, tanggal_putusan, rincian_amar, relevan_bbm, sumber_data,
+lampiran_pdf, file_pdf, rantai_perkara, klasifikasi, sumber_daftar, url_putusan, bukti_kutipan (kutipan teks putusan), catatan.
+Nilai yang tidak ditemukan ditulis NA. Jumlah NA: barang_bbm: 2, hasil_putusan: 3, nilai_kerugian_uang: 67, nilai_kerugian_volume: 26, tahun_kejadian: 37.
+
+METODE EKSTRAKSI
+- Metadata dari halaman overview tiap putusan. Teks lengkap dari PDF lampiran (bila ada).
+- Tujuh kolom diisi oleh agen AI yang membaca seluruh teks putusan, lalu diperiksa ulang oleh agen verifikator independen
+  terhadap teks sumber. Setelah itu dilakukan rekonsiliasi antartingkat dalam satu rantai perkara.
+- Putusan tanpa PDF diisi dari overview; fakta perkara (tahun kejadian, jenis BBM, volume) boleh diambil dari putusan lain dalam
+  rantai yang sama, dan ditandai di kolom sumber_data.
+- Nama terdakwa dan data pribadi tidak dicantumkan. Kutipan di kolom bukti_kutipan memungkinkan pemeriksaan cepat.
