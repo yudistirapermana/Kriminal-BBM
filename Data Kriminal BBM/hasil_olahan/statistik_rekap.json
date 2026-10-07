@@ -1,0 +1,43 @@
+{
+ "baris": 166,
+ "rantai_perkara": 107,
+ "per_tahun_putusan": {
+  "2020": 44,
+  "2021": 21,
+  "2022": 14,
+  "2023": 35,
+  "2024": 5,
+  "2025": 1,
+  "2026": 46
+ },
+ "per_tingkat": {
+  "MA": 47,
+  "PN": 92,
+  "PT": 26,
+  "Pengadilan Militer": 1
+ },
+ "per_sumber_daftar": {
+  "Tabulasi tim (tabulasi kebocoran bbm subsidi_v3.xlsx)": 46,
+  "klasifikasi Migas": 65,
+  "putusan terkait (rantai perkara Migas)": 55
+ },
+ "per_sumber_data": {
+  "Overview + PDF putusan terkait (chain)": 6,
+  "Overview + data putusan terkait (chain)": 34,
+  "Overview direktori": 13,
+  "PDF putusan": 52,
+  "PDF putusan + data putusan terkait (chain)": 15,
+  "Tabulasi tim (tabulasi kebocoran bbm subsidi_v3.xlsx), dari PDF putusan": 46
+ },
+ "dengan_pdf": 68,
+ "relevan_bbm": {
+  "Ya": 166
+ },
+ "jumlah_na": {
+  "barang_bbm": 0,
+  "hasil_putusan": 1,
+  "nilai_kerugian_uang": 42,
+  "nilai_kerugian_volume": 7,
+  "tahun_kejadian": 21
+ }
+}
