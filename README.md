@@ -83,8 +83,10 @@ Overview yang tidak menyebut BBM sama sekali (misalnya MA "Menolak permohonan ka
   dan hasil putusan untuk PT/MA yang menguatkan/menolak kasasi penuntut umum) diisi dari putusan itu. Kolom `dasar_*`
   menyebut nomor putusan sumbernya.
 
-Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila situs meminta CAPTCHA, skrip berhenti
-(tidak menembusnya) dan menyimpan antrean yang tersisa. Uji: `Rscript -e 'testthat::test_file("tests/R/test_scrape_kriminalitas_bbm.R")'`.
+Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi (bila robots.txt tidak dapat diambil, skrip
+berhenti). Bila situs meminta CAPTCHA atau menolak akses (HTTP 403) tiga kali berturut-turut, skrip berhenti (tidak
+menembusnya) dan menyimpan antrean yang tersisa. Saat dilanjutkan, putusan terkait yang belum terekam dimasukkan lagi
+ke antrean, dan baris dari versi skrip sebelumnya dihitung ulang dari cache HTML dan PDF di disk. Uji: `Rscript -e 'testthat::test_file("tests/R/test_scrape_kriminalitas_bbm.R")'`.
 
 **Tolok ukur ekstraksi otomatis** dibandingkan dengan rekap manual, pada 68 PDF yang dirujuk rekap
 (`tests/R/test_scrape_kriminalitas_bbm.R`):
@@ -95,16 +97,18 @@ Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila 
 | tahun_putusan | 68/68 | 100% |
 | tingkat_persidangan | 67/68 | 100% |
 | hasil_putusan | 68/68 | 100% |
-| barang_bbm (jenis utama) | 68/68 | 98,5% (label subsidi/non-subsidi: 20/20 sama) |
+| barang_bbm (jenis utama) | 68/68 | 98,5% (label subsidi/non-subsidi: 31/31 sama) |
 | provinsi | 67/68 | (terisi 98,5%) |
 | tahun_kejadian | 46/68 | 91% |
-| nilai_kerugian_volume (±1%) | 65/68 | 83% |
-| nilai_kerugian_uang (±1%) | 43/68 | 58% |
+| nilai_kerugian_volume (±1%) | 65/68 | 86% |
+| nilai_kerugian_uang (±1%) | 42/68 | 64% |
 
 Kolom "Terisi" menghitung PDF yang nilainya terisi di hasil otomatis dan di rekap manual. Volume dibaca dengan urutan:
 butir barang bukti di amar; daftar "barang bukti berupa" yang dikutip; lalu angka di uraian perkara dengan skor konteks
 (disita/ditemukan/total didahulukan, pesanan/penjualan rutin/"non subsidi" dihindari). "N jerigen masing-masing berisi X
-liter" dihitung N × X, tetapi "kapasitas masing-masing X liter" tidak, dan total yang disebut didahulukan.
+liter" dihitung N × X, tetapi "kapasitas masing-masing X liter" tidak, dan total yang disebut didahulukan. Wadah
+penuh tanpa angka isi ("10 jerigen kapasitas 20 liter berisi Pertalite") dihitung N × X, kecuali disebut kosong. Ton
+dikonversi ke liter (1 ton = 1.000 liter, seperti di teks putusan) dan konversinya dicatat di `dasar_volume`.
 
 Volume dan nilai uang paling sering berbeda dari pengodean manual:
 

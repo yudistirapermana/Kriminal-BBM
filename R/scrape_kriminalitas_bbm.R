@@ -88,9 +88,10 @@ KONFIG <- list(
 # Pola kata kunci jenis BBM (untuk relevansi dan kolom barang_bbm). Urutan = prioritas penamaan.
 POLA_BBM <- c(
   "Biosolar"       = "bio\\s*-?\\s*solar",
-  "Solar"          = "(?<!bio)(?<!bio )(?<!bio-)\\bsolar\\b|\\bhsd\\b|high speed diesel",
+  # Bukan "solar cell/panel" (lampu jalan tenaga surya) atau "beras premium".
+  "Solar"          = "(?<!bio)(?<!bio )(?<!bio-)\\bsolar\\b(?!\\s*(cell|panel|sel\\b|surya|system|home|lamp))|\\bhsd\\b|high speed diesel",
   "Pertalite"      = "pertalit",
-  "Premium"        = "\\bpremium\\b",
+  "Premium"        = "(?<!beras )(?<!kelas )(?<!kualitas )(?<!mutu )\\bpremium\\b",
   "Pertamax"       = "pertamax",
   "Dexlite"        = "dexlite",
   "Pertamina Dex"  = "pertamina\\s+dex\\b",
@@ -233,9 +234,12 @@ mirip_captcha <- function(html) {
   # jadi hanya widget/formulir verifikasi yang dianggap CAPTCHA.
   if (is.null(html) || length(html) == 0 || is.na(html)) return(FALSE)
   h <- str_to_lower(substr(dekode_aman(html), 1, 200000))
-  isTRUE(str_detect(h, paste0("class=[\"'][^\"']*g-recaptcha|h-captcha|hcaptcha\\.com|cf-turnstile|challenges\\.cloudflare\\.com|",
+  # reCAPTCHA v2 yang dirender eksplisit (grecaptcha.render, render=explicit, data-sitekey) tetap dianggap CAPTCHA;
+  # input tersembunyi pembawa token v3 (name="recaptcha_response") tidak.
+  isTRUE(str_detect(h, paste0("class=[\"'][^\"']*g-recaptcha|data-sitekey|grecaptcha\\.render\\(|recaptcha/(api|enterprise)\\.js\\?[^\"']*render=explicit|",
+                              "h-captcha|hcaptcha\\.com|cf-turnstile|challenges\\.cloudflare\\.com|",
                               "saya bukan robot|i'm not a robot|cf-chl-|challenge-platform|just a moment\\.\\.\\.|ddos-guard|",
-                              "verifikasi keamanan|<input[^>]+name=[\"']?[a-z_]*captcha|<img[^>]+captcha")))
+                              "verifikasi keamanan|<input(?![^>]*type=[\"']?hidden)[^>]+name=[\"']?[a-z_]*captcha|<img[^>]+captcha")))
 }
 
 dekode_aman <- function(x) {
@@ -248,12 +252,24 @@ izin_robots <- function(url, cfg = KONFIG) {
   # robots.txt menurut RFC 9309: grup User-agent berurutan, Allow/Disallow, '*' dan '$', aturan terpanjang menang.
   akar <- str_extract(url, "^https?://[^/]+")
   if (!exists(akar, envir = .robots_cache, inherits = FALSE)) {
-    teks <- tryCatch({
-      r <- GET(paste0(akar, "/robots.txt"), user_agent(cfg$user_agent), timeout(30))
-      if (status_code(r) == 200) teks_respons(r) else ""
-    }, error = function(e) "")
+    teks <- NULL; alasan <- ""
+    for (i in seq_len(cfg$maks_coba)) {
+      tunggu_giliran(cfg)
+      r <- tryCatch(GET(paste0(akar, "/robots.txt"), user_agent(cfg$user_agent), timeout(30)), error = function(e) e)
+      if (inherits(r, "response")) {
+        kode <- status_code(r)
+        if (kode == 200) { teks <- teks_respons(r); break }
+        if (kode >= 400 && kode < 500) { teks <- ""; break }   # RFC 9309 2.3.1.3: tidak tersedia = boleh
+        alasan <- paste("HTTP", kode)
+      } else alasan <- conditionMessage(r)
+    }
+    # RFC 9309 2.3.1.4: tidak terjangkau (5xx/galat jaringan) = semua dilarang. Tidak di-cache; penelusuran berhenti
+    # dengan antrean tersimpan (kelas captcha_error) dan bisa dilanjutkan nanti.
+    if (is.null(teks)) stop(structure(class = c("robots_error", "captcha_error", "error", "condition"),
+      list(message = paste0("robots.txt tidak dapat diambil (", alasan, "): ", akar,
+                            "\nPenelusuran bisa dilanjutkan nanti dengan perintah yang sama."), call = NULL)))
     # Disimpan juga bila kosong (list()), agar robots.txt tidak diambil ulang sebelum setiap permintaan.
-    assign(akar, aturan_robots(teks %||% "", "KajianBBM-UGM") %||% list(), envir = .robots_cache)
+    assign(akar, aturan_robots(teks, "KajianBBM-UGM") %||% list(), envir = .robots_cache)
   }
   robots_mengizinkan(get(akar, envir = .robots_cache), str_remove(url, "^https?://[^/]+"))
 }
@@ -312,7 +328,7 @@ minta <- function(url, cfg, simpan_ke = NULL) {
       if (is.null(simpan_ke)) GET(url, user_agent(cfg$user_agent), timeout(90), add_headers(`Accept-Language` = "id-ID,id;q=0.9"))
       else GET(url, user_agent(cfg$user_agent), timeout(180), write_disk(simpan_ke, overwrite = TRUE)),
       error = function(e) e)
-    if (inherits(r, "response") && status_code(r) == 200) return(r)
+    if (inherits(r, "response") && status_code(r) == 200) { .terakhir_minta$n403 <- 0; return(r) }
     tunda <- cfg$jeda_detik * 2^i
     if (inherits(r, "response")) {
       kode <- status_code(r)
@@ -321,7 +337,12 @@ minta <- function(url, cfg, simpan_ke = NULL) {
       # Halaman tantangan anti-bot sering dikirim dengan 403/429/503: hentikan, jangan diulang terus.
       if (mirip_captcha(isi) || !is.null(headers(r)[["cf-mitigated"]])) stop(kondisi_captcha(url))
       galat <- paste("HTTP", kode)
-      # 403 biasa (mis. dokumen yang dibatasi) dicatat sebagai galat URL ini saja; penelusuran lanjut.
+      # 403 biasa (mis. dokumen yang dibatasi) dicatat sebagai galat URL ini saja; penelusuran lanjut. Tiga 403
+      # berturut-turut (pada URL berbeda) berarti akses diblokir: berhenti seperti CAPTCHA.
+      if (kode == 403) {
+        .terakhir_minta$n403 <- (.terakhir_minta$n403 %||% 0) + 1
+        if (.terakhir_minta$n403 >= 3) { .terakhir_minta$n403 <- 0; stop(kondisi_captcha(url, "Situs menolak akses (HTTP 403) berulang kali")) }
+      }
       if (!kode %in% c(429, 500, 502, 503, 504)) break
       ra <- headers(r)[["retry-after"]]
       ra <- if (length(ra)) suppressWarnings(as.numeric(ra[1])) else NA_real_
@@ -349,7 +370,10 @@ teks_respons <- function(r) {
 
 halaman_dikenali <- function(html, jenis) {
   # Halaman galat (mis. "A Database Error Occurred") atau pemblokiran jenis lain tidak boleh di-cache.
-  galat <- str_detect(html, regex("Database Error|A PHP Error|Fatal error|Uncaught Exception|Service Unavailable|Error Occurred", ignore_case = TRUE))
+  # Pemberitahuan PHP ringan ("A PHP Error was encountered / Severity: Notice|Warning") di halaman lengkap tidak
+  # membuat halaman ditolak; galat fatal dan halaman galat basis data ditolak.
+  galat <- str_detect(html, regex(paste0("Database Error|Fatal error|Uncaught Exception|Service Unavailable|Error Occurred|",
+                                         "Severity:\\s*(Error|Parsing Error|Core Error|Compile Error|User Error)\\b"), ignore_case = TRUE))
   if (jenis == "overview")
     return(!galat && str_detect(html, regex(">\\s*(Nomor|Tingkat Proses|Klasifikasi|Lembaga Peradilan)(\\s|&nbsp;|&#160;| |:)*<", ignore_case = TRUE)))
   if (jenis == "daftar")
@@ -381,8 +405,14 @@ ambil_html <- function(url, cfg, folder_cache, pakai_cache = TRUE, jenis = "over
   html
 }
 
+pdf_terbaca <- function(f) file.exists(f) && !inherits(tryCatch(suppressMessages(pdf_info(f)), error = function(e) e), "error")
+
 unduh_pdf <- function(url, tujuan, cfg) {
-  if (file.exists(tujuan) && file.size(tujuan) > 0) return(tujuan)
+  # PDF yang sudah ada dipakai lagi bila terbaca; berkas rusak/terpotong dihapus dan diunduh ulang.
+  if (file.exists(tujuan) && file.size(tujuan) > 0) {
+    if (pdf_terbaca(tujuan)) return(tujuan)
+    unlink(tujuan)
+  }
   dir.create(dirname(tujuan), showWarnings = FALSE, recursive = TRUE)
   sementara <- paste0(tujuan, ".part")
   r <- minta(url, cfg, simpan_ke = sementara)
@@ -393,6 +423,7 @@ unduh_pdf <- function(url, tujuan, cfg) {
     if (mirip_captcha(rawToChar(mentah[mentah != as.raw(0)]))) stop(kondisi_captcha(url))
     stop("berkas unduhan bukan PDF: ", url)
   }
+  if (!pdf_terbaca(sementara)) { unlink(sementara); stop("berkas PDF rusak/terpotong: ", url) }
   file.rename(sementara, tujuan)
   tujuan
 }
@@ -692,7 +723,8 @@ hasil_dari_kutipan <- function(teks) {
 }
 
 hitung_bbm <- function(teks) {
-  t <- str_to_lower(teks %||% "")
+  # Teks diratakan dulu agar "bio\nsolar" tidak terhitung sebagai Biosolar dan Solar sekaligus.
+  t <- str_to_lower(str_squish(teks %||% ""))
   n <- vapply(POLA_BBM, function(p) str_count(t, regex(p)), 0)
   n[n > 0][order(-n[n > 0])]
 }
@@ -730,27 +762,39 @@ barang_bbm <- function(amar, teks) {
   if (all(c("Biosolar", "Solar") %in% jenis)) jenis <- setdiff(jenis, "Biosolar")
   # "Premium (bensin)": bensin bukan jenis tersendiri bila jenis bensin tertentu sudah disebut.
   if (any(c("Premium", "Pertalite", "Pertamax") %in% jenis)) jenis <- setdiff(jenis, "Bensin (jenis tidak disebut)")
-  t <- str_to_lower(str_squish(sumber))
+  # "subsidiair/subsidair" (pidana pengganti) bukan subsidi.
+  rata <- function(x) str_replace_all(str_to_lower(str_squish(x %||% "")), "subsid(?:i?ai?r|er)\\b", "pengganti")
+  t <- rata(sumber)
+  tf <- rata(teks)
   # Perbuatan "penyalahgunaan BBM yang disubsidi" (Pasal 55 UU Migas) menandai objek perkara BBM subsidi.
-  salah_guna_subsidi <- str_detect(str_to_lower(str_squish(teks %||% "")), "(penyalahgunaan|menyalahgunakan)[^.;]{0,80}(di|ber)subsidi")
+  salah_guna_subsidi <- str_detect(tf, "(penyalahgunaa?n|menyalahgunakan)[^.;]{0,80}(di|ber)\\s?subsidi")
+  BBM_TEGAS <- "(bbm|bahan\\s+bakar\\s+minyak|(minyak\\s+)?(bio\\s*-?\\s*)?solar|pertalite|minyak\\s+tanah|premium)?\\s*(jenis\\s+)?(yang\\s+)?"
+  NEGASI <- "\\btidak\\s+(di|ber)subsidi|\\bnon[- ]?(ber|di)subsidi|\\btanpa\\s+subsidi"
   label <- vapply(jenis, function(j) {
     pos <- str_locate_all(t, regex(POLA_BBM[[j]]))[[1]]
     sekitar <- str_sub(t, pmax(1, pos[, 1] - 120), pos[, 2] + 120)
+    # Bila sebutan di amar (daftar barang bukti) tidak memuat keterangan subsidi, keterangan dibaca dari seluruh teks.
+    penuh <- FALSE
+    if (!any(str_detect(sekitar, "subsidi|industri")) && !identical(t, tf)) {
+      pos <- str_locate_all(tf, regex(POLA_BBM[[j]]))[[1]]
+      sekitar <- str_sub(tf, pmax(1, pos[, 1] - 120), pos[, 2] + 120)
+      penuh <- TRUE
+    }
     nama <- if (j == "Solar" && "Biosolar" %in% names(n)) "Solar/Biosolar" else j
-    # "Perindustrian" bukan "industri"; "bukanlah solar yang bersubsidi" = non-subsidi, tetapi "bukan konsumen
-    # yang berhak atas BBM subsidi" tidak. Perkara bisa menyebut keduanya (mis. pembelian solar non-subsidi di
-    # samping solar subsidi objek perkara): label mengikuti jumlah sebutan terbanyak.
-    non <- str_detect(sekitar, paste0("\\bnon[- ]?subsidi|solar\\s+industri|\\bindustri\\b|\\bbukan(lah)?\\s+(merupakan\\s+)?",
-                                      "(bbm|bahan\\s+bakar\\s+minyak|(minyak\\s+)?(bio\\s*-?\\s*)?solar|pertalite|minyak\\s+tanah|premium)?\\s*(jenis\\s+)?(yang\\s+)?(ber)?subsidi"))
-    tegas <- str_detect(sekitar, "\\bbukan(lah)?\\s+(merupakan\\s+)?(bbm|bahan\\s+bakar\\s+minyak|(minyak\\s+)?(bio\\s*-?\\s*)?solar|pertalite|minyak\\s+tanah|premium)?\\s*(jenis\\s+)?(yang\\s+)?(ber)?subsidi")
+    # "Perindustrian" bukan "industri"; "bukanlah solar yang bersubsidi", "tidak disubsidi" = non-subsidi, tetapi
+    # "bukan konsumen yang berhak atas BBM subsidi" tidak. Perkara bisa menyebut keduanya (mis. pembelian solar
+    # non-subsidi di samping solar subsidi objek perkara): label mengikuti jumlah sebutan terbanyak.
+    tegas <- str_detect(sekitar, paste0("\\bbukan(lah)?\\s+(merupakan\\s+)?", BBM_TEGAS, "(ber|di)?subsidi"))
+    non <- str_detect(sekitar, paste0("\\bnon[- ]?subsidi|solar\\s+industri|\\bindustri\\b|", NEGASI)) | tegas
     sub <- str_detect(sekitar, "subsidi") & !non
-    sub_ada <- str_detect(sekitar, "(?<!non)(?<!non )(?<!non-)(ber|di)?subsidi")
+    sub_ada <- str_detect(sekitar, "(?<![a-z])(?<!non )(?<!non-)(ber|di)?subsidi") & !str_detect(sekitar, NEGASI)
     # Urutan: pernyataan tegas "bukan ... bersubsidi" > perbuatan penyalahgunaan BBM subsidi > sebutan terbanyak.
     # Dalam perkara penyalahgunaan BBM subsidi, "bukan ... bersubsidi" (mis. dalil pembelaan) harus sama banyak.
+    # Keterangan dari seluruh teks (bukan amar) yang seri tidak diberi label.
     if (any(tegas) && (!salah_guna_subsidi || sum(tegas) >= sum(sub_ada & !tegas))) paste0(nama, " (non-subsidi)")
     else if (salah_guna_subsidi && any(sub_ada)) paste0(nama, " (subsidi)")
     else if (sum(non) > sum(sub)) paste0(nama, " (non-subsidi)")
-    else if (any(sub)) paste0(nama, " (subsidi)") else nama
+    else if (any(sub) && (!penuh || sum(sub) > sum(non))) paste0(nama, " (subsidi)") else nama
   }, "")
   paste(unname(label), collapse = "; ")
 }
@@ -770,7 +814,9 @@ skor_volume <- function(teks, awal, akhir) {
   sesudah <- str_to_lower(str_squish(str_sub(teks, akhir + 1, akhir + 60)))
   klausa <- paste(str_remove(str_extract(sebelum, "[^;.]*$"), "^.*\\bsedangkan\\b"), str_extract(sesudah, "^[^;.]*"))
   # Kalimat yang memuat angka (titik/titik koma diikuti spasi; "1.000" tidak memotong kalimat).
-  potong <- function(x, ujung) map_chr(str_split(str_to_lower(str_squish(x)), "[.;]\\s"), ujung)
+  # Singkatan ("PT. ", "Kab. ", "No. ") tidak memotong kalimat.
+  potong <- function(x, ujung) map_chr(str_split(str_replace_all(str_to_lower(str_squish(x)),
+    "\\b(pt|cv|ud|no|jl|kab|kec|kel|ds|sdr|sdri|rp|hj|dr|ir|drs|pol|tgl|bpk|st)\\.\\s", "\\1 "), "[.;]\\s"), ujung)
   kalimat <- paste(potong(str_sub(teks, pmax(1, awal - 150), awal - 1), ~ tail(.x, 1)),
                    potong(str_sub(teks, awal, akhir + 100), ~ .x[1]))
   2 * str_detect(konteks, "disita|diamankan|barang bukti|ditemukan|dirampas|tertangkap|kedapatan|ditangkap") +
@@ -799,29 +845,39 @@ volume_bbm <- function(teks) {
   # "berisi 30 liter", "isi 35 liter", "@ 30 liter", "diisi sebanyak 220 liter" = isi.
   sesudah <- str_to_lower(str_squish(str_sub(teks, m[, 2] + 1, m[, 2] + 80)))
   # "jerigen isi 35 liter yang berisikan premium sebanyak 155 liter": "isi" di sini ukuran wadah.
-  isi_wadah <- str_detect(klausa, paste0(POLA_WADAH, "\\s+isi\\s*$")) & str_detect(sesudah, "^[^;]{0,60}(berisi|diisi|sebanyak)")
+  # "jurigen plastik isi 35 liter berisi premium" (tanpa angka isi) juga ukuran wadah; volume_butir menghitungnya N x X.
+  isi_wadah <- str_detect(klausa, paste0(POLA_WADAH, "(?:\\s+[a-z]+){0,3}\\s+isi\\s*$")) & str_detect(sesudah, "^[^;]{0,60}(berisi|diisi|sebanyak)")
   kapasitas <- (str_detect(klausa, "kapasit|ukur|volume\\s*$") &
-                  !str_detect(klausa, "(berisi|isi|diisi|dimuat|bermuatan)\\s*(\\S+\\s*){0,4}$")) | str_detect(klausa, "kosong") | isi_wadah
+                  !str_detect(klausa, "(berisi|isi|diisi|dimuat|bermuatan)\\s*(\\S+\\s*){0,4}$")) | str_detect(klausa, "kosong") | isi_wadah |
+    str_detect(klausa, "(kapasit\\w*|ukuran)\\s+isi\\s*$")
+  # Tarif "upah per 1 (satu) ton Rp 300.000" bukan volume.
+  tarif <- str_detect(klausa, "\\b(per|setiap|tiap)\\s*$")
   dokumen <- str_detect(str_to_lower(str_sub(teks, pmax(1, m[, 1] - 90), m[, 1] - 1)),
                         "lembar|faktur|invoice|delivery|\\bdo\\b|nota\\b|kwitansi|kuitansi|surat jalan|berita acara|\\bpo\\b|purchase|dokumen|laporan|rekening|pesanan|pemesanan|order|struk|rekomendasi|alokasi|sounding")
   konteks <- str_to_lower(str_squish(str_sub(teks, pmax(1, m[, 1] - 150), m[, 2] + 100)))
   terkait <- str_detect(konteks, regex(KATA_BBM_KONTEKS, ignore_case = TRUE))
   tibble(nilai = nilai, satuan = satuan, konteks = str_squish(str_sub(teks, pmax(1, m[, 1] - 60), m[, 2] + 40)),
          sebelum = str_to_lower(str_squish(str_sub(teks, pmax(1, m[, 1] - 120), m[, 1] - 1))),
-         kapasitas = kapasitas, terkait = terkait, dokumen = dokumen, skor = skor_volume(teks, m[, 1], m[, 2])) |>
-    filter(!is.na(nilai), nilai > 0, !kapasitas, !dokumen, terkait) |>
+         kapasitas = kapasitas, terkait = terkait, dokumen = dokumen, tarif = tarif, skor = skor_volume(teks, m[, 1], m[, 2])) |>
+    filter(!is.na(nilai), nilai > 0, !kapasitas, !dokumen, terkait, !tarif) |>
     select(nilai, satuan, konteks, sebelum, skor)
 }
 
-POLA_WADAH <- "(?:jerigen|jeriken|jirigen|jurigen|derigen|dirigen|drum|galon|tandon|baby\\s*tank|botol|tong|kempu|ember)"
+# Wadah BBM. Ejaan jerigen beragam: jerigen, jeriken, jirigen, jurigen, jergen, jiregen, derigen, dirigen; galon/gallon.
+WADAH <- c("j[aeiu]r[aeiy]?[gk]en", "d[aeiu]r[aeiy]?[gk]en", "drum", "gall?on", "tandon", "baby\\s*tank", "botol", "tong",
+           "kempu", "ember")
+POLA_WADAH <- paste0("(?:", paste(WADAH, collapse = "|"), ")\\b")
 JUMLAH_WADAH <- "(?<![\\d.,])(\\d{1,3}(?:\\.\\d{3})+|\\d+)\\s*(?:\\([^()]{0,40}\\))?\\s*(?:buah\\s+|unit\\s+)?"
 # "27 jerigen masing-masing berisi 30 liter", "10 jeriken @ 30 liter", "26 jerigen berisi setiap 1 (satu) jerigen
 # berisi 30 liter" -> jumlah wadah x isi. Ditolak bila angkanya kapasitas ("4 kempu kapasitas masing-masing 1.000 liter").
-POLA_KALI <- paste0(JUMLAH_WADAH, POLA_WADAH, "([^;.\\n]{0,100}?)((?:masing\\s*-?\\s*masing|setiap|tiap|@)\\s*",
+# Celah antara wadah dan "masing-masing": tidak melewati "N wadah" lain ("27 jerigen ... dimana 26 jerigen berisi setiap
+# 1 jerigen berisi 30 liter" -> 26 x 30) dan tidak melewati titik kecuali titik ribuan ("kapasitas 1.000 liter").
+GAP_KALI <- paste0("((?:(?!\\d+\\s*(?:\\([^()]{0,40}\\))?\\s*(?:buah\\s+|unit\\s+)?", POLA_WADAH, ")(?:[^;.\\n]|(?<=\\d)\\.(?=\\d))){0,100}?)")
+POLA_KALI <- paste0(JUMLAH_WADAH, POLA_WADAH, GAP_KALI, "((?:masing\\s*-?\\s*masing|setiap|tiap|@)\\s*",
                     "(?:(?:\\d+\\s*(?:\\([^()]{0,30}\\))?\\s*)?", POLA_WADAH, "\\s*)?(?:berisi(?:kan)?|isi|diisi)?\\s*",
                     "(?:[a-z ]{0,40}?)(?:sebanyak|kurang lebih|±|\\+/-|\\+)?)\\s*", POLA_ANGKA, "\\s*(?:\\([^()]{0,60}\\))?\\s*(?:liter|ltr|lt|l)\\b")
 # Barang bukti "10 jerigen kapasitas 20 liter yang berisi Pertalite" (wadah penuh, isi tidak disebut) -> 10 x 20.
-POLA_PENUH <- paste0(JUMLAH_WADAH, POLA_WADAH, "[^;]{0,60}?(?:kapasitas|\\w*ukur\\w*)\\s*(?:masing\\s*-?\\s*masing\\s*)?",
+POLA_PENUH <- paste0(JUMLAH_WADAH, POLA_WADAH, "[^;]{0,60}?(?:kapasitas|\\w*ukur\\w*|\\bisi\\b)\\s*(?:isi\\s*)?(?:masing\\s*-?\\s*masing\\s*)?",
                      POLA_ANGKA, "\\s*(?:\\([^()]{0,60}\\))?\\s*(?:liter|ltr|lt|l)\\b")
 POLA_DOKUMEN_ITEM <- paste0("^\\W*(?:\\d+\\s*(?:\\([^()]{0,30}\\))?\\s*)?(?:buah|lembar|bundel|rangkap|eksemplar|set)?\\s*",
                             "(?:lembar|struk|surat|nota|faktur|invoice|kwitansi|kuitansi|delivery|do\\b|rekomendasi|buku|blangko|",
@@ -862,6 +918,8 @@ volume_butir <- function(teks) {
   for (b in butir_barang_bukti(teks)) {
     bl <- str_to_lower(b)
     if (str_detect(str_sub(bl, 1, 80), POLA_DOKUMEN_ITEM)) next
+    # Alat (teko, selang, pompa, corong, ...) bukan BBM walaupun butirnya menyebut BBM dan ukuran wadah.
+    if (str_detect(bl, "^\\W*(?:\\d+\\s*(?:\\([^()]{0,30}\\))?\\s*)?(?:buah|unit|set)?\\s*(?:teko|selang|pompa|mesin\\s+pompa|alkon|corong|timbangan|gayung|ceret|cerek)\\b")) next
     if (!str_detect(bl, regex(KATA_BBM_KONTEKS, ignore_case = TRUE))) next
     v <- volume_bbm(b)
     # Angka yang mengikuti sebutan perkara lain ("dilelang bersama perkara X dengan total 695 liter") bukan barang ini.
@@ -870,15 +928,22 @@ volume_butir <- function(teks) {
     x <- unique(v$nilai[v$satuan == s])
     k <- kali_wadah(bl)
     if (nrow(k) && s == "liter") {
-      lain <- setdiff(x, k$isi)
+      vl <- v[v$satuan == s & !(v$nilai %in% k$isi), ]
+      lain <- unique(vl$nilai)
       kali <- sum(k$nilai)
-      nilai <- if (length(lain) && max(lain) >= kali) max(lain) else kali + sum(lain)
-      dasar <- if (length(lain) && max(lain) >= kali) "total disebut" else paste0(paste(k$jumlah, "x", k$isi, collapse = " + "), " liter")
+      # Total hasil penimbangan/penghitungan ("jumlah keseluruhan 3.890,224 liter") sedikit di bawah N x X: total itu
+      # yang dipakai, bukan dijumlah dengan N x X. Total jauh lebih kecil adalah subtotal kelompok lain.
+      tot <- unique(vl$nilai[str_detect(vl$sebelum, "\\b(total|jumlah(\\s+keseluruhan)?|keseluruhan|seluruhnya)\\s*(sebanyak|kurang lebih|±|\\+/-)?\\s*$")])
+      tot <- tot[tot >= 0.8 * kali]
+      pakai_total <- length(tot) > 0 || (length(lain) && max(lain) >= kali)
+      nilai <- if (length(tot)) max(tot) else if (length(lain) && max(lain) >= kali) max(lain) else kali + sum(lain)
+      dasar <- if (pakai_total) "total disebut" else paste0(paste(k$jumlah, "x", k$isi, collapse = " + "), " liter")
       hasil[[length(hasil) + 1]] <- tibble(nilai = nilai, satuan = "liter", konteks = paste0(dasar, ": ", str_sub(b, 1, 120)))
       next
     }
     if (!length(x)) {
-      p <- kali_wadah(bl, POLA_PENUH)
+      # Wadah kosong ("dalam keadaan kosong", "tidak berisi") tidak dihitung penuh.
+      p <- if (str_detect(bl, "kosong|tidak\\s+berisi")) kali_wadah("", POLA_PENUH) else kali_wadah(bl, POLA_PENUH)
       if (nrow(p)) hasil[[length(hasil) + 1]] <- tibble(nilai = sum(p$nilai), satuan = "liter",
                                                         konteks = paste0(paste(p$jumlah, "x", p$isi, collapse = " + "), " liter (wadah penuh): ", str_sub(b, 1, 120)))
       next
@@ -898,10 +963,13 @@ nilai_volume <- function(amar, teks) {
   # Prioritas: (1) butir barang bukti BBM di amar; (2) daftar "barang bukti berupa ..." sebelum amar, dari yang
   # terakhir (putusan PT/MA mengutip amar/tuntutan sebelumnya); (3) angka di uraian perkara, dipilih dengan skor
   # konteks (penyitaan/total didahulukan), lalu angka terbesar.
+  # Ton dikonversi ke liter (1 ton = 1.000 liter, konvensi yang dipakai teks putusan: "2 ton/2.000 liter") bila
+  # ada butir dalam liter; konversinya dicatat di dasar.
   ringkas <- function(v, dasar) {
-    s <- if (any(v$satuan == "liter")) "liter" else "ton"
-    v <- v[v$satuan == s, ]
-    list(nilai = sum(v$nilai), satuan = s, dasar = paste0(dasar, ": ", paste(angka_teks(v$nilai), collapse = " + "), " ", s))
+    if (all(v$satuan == "ton"))
+      return(list(nilai = sum(v$nilai), satuan = "ton", dasar = paste0(dasar, ": ", paste(angka_teks(v$nilai), collapse = " + "), " ton")))
+    lbl <- ifelse(v$satuan == "ton", paste0(angka_teks(v$nilai), " ton (= ", angka_teks(v$nilai * 1000), " liter)"), paste0(angka_teks(v$nilai), " liter"))
+    list(nilai = sum(ifelse(v$satuan == "ton", v$nilai * 1000, v$nilai)), satuan = "liter", dasar = paste0(dasar, ": ", paste(lbl, collapse = " + ")))
   }
   v <- volume_butir(amar %||% "")
   if (nrow(v)) return(ringkas(v, "jumlah barang bukti BBM di amar"))
@@ -925,9 +993,11 @@ nilai_volume <- function(amar, teks) {
                              skor = skor_volume(sq, k$awal, k$akhir)))
   if (nrow(v)) {
     s <- if (any(v$satuan == "liter")) "liter" else "ton"
-    v <- v[v$satuan == s, ]
+    ton <- v$satuan == "ton"
+    if (s == "liter") { v$nilai[ton] <- v$nilai[ton] * 1000; v$satuan[ton] <- "liter" }
+    v$catatan <- ifelse(ton & s == "liter", " (ton dikonversi: 1 ton = 1.000 liter)", "")
     v <- v[order(-v$skor, -v$nilai), ]
-    return(list(nilai = v$nilai[1], satuan = s, dasar = paste0("angka di uraian perkara (konteks penyitaan/total didahulukan): \"", v$konteks[1], "\"")))
+    return(list(nilai = v$nilai[1], satuan = s, dasar = paste0("angka di uraian perkara (konteks penyitaan/total didahulukan): \"", v$konteks[1], "\"", v$catatan[1])))
   }
   list(nilai = NA_real_, satuan = NA_character_, dasar = NA_character_)
 }
@@ -939,7 +1009,7 @@ KATA_RUPIAH <- c(kerugian_negara = "kerugian\\s+(?:keuangan\\s+)?negara", hasil_
                  nilai_transaksi = "harga|seharga|dijual|menjual|membeli|dibeli|senilai|nilai|total")
 # Akhir kalimat: ". " diikuti huruf kapital, kecuali setelah singkatan (PT., No., Kab., Sdr., inisial).
 POLA_AKHIR_KALIMAT <- "(?<!\\b(?:PT|CV|UD|No|Jl|Kab|Kec|Kel|Ds|Sdr|Sdri|Rp|Hj|Dr|Ir|Drs|KM|Pol|Tgl|Bpk|St|[A-Z]))\\.\\s+(?=[A-Z])"
-WADAH_HARGA <- "(jerigen|jeriken|jirigen|drum|galon|botol|tandon|tong|kempu|ember)"
+WADAH_HARGA <- paste0("(", paste(WADAH, collapse = "|"), ")")
 
 jenis_nominal <- function(sebelum, sesudah) {
   # Teks PDF terpotong per baris (~70 karakter): baris baru diperlakukan sebagai spasi agar kata kunci di baris
@@ -951,11 +1021,16 @@ jenis_nominal <- function(sebelum, sesudah) {
   fee <- "keuntungan|untung|laba|selisih|upah|imbalan|ongkos|biaya|bayar|bayaran|membayar|titip|sewa|jasa|komisi|fee|insentif|transport"
   per_wadah <- paste0("^\\s*(,-|,00)?\\s*(/\\s*|per\\s*|setiap\\s*|tiap\\s*)", WADAH_HARGA)
   per_liter <- "^\\s*(,-|,00)?\\s*(/\\s*(liter|ltr|l\\b)|per\\s*liter|perliter|setiap\\s*liter|tiap\\s*liter)"
-  # Lelang/penjualan langsung barang bukti didahulukan ("penjualan langsung ... senilai Rp X"), kecuali lelang
-  # gabungan dengan perkara lain (nilainya bukan untuk barang bukti perkara ini saja).
-  if (str_detect(b, KATA_RUPIAH[["hasil_lelang"]])) return(if (str_detect(b, "perkara|bersama-sama")) "lain" else "hasil_lelang")
+  # Lelang/penjualan langsung barang bukti didahulukan ("penjualan langsung ... senilai Rp X") bila kata lelang lebih
+  # dekat ke angka daripada denda/biaya perkara, dan angkanya bukan harga per liter/wadah. "Tempat Pelelangan Ikan"
+  # bukan lelang. Lelang gabungan beberapa perkara ditandai tersendiri (dibagi pro rata di nilai_kerugian).
+  b_lel <- str_replace_all(b, "pelelangan\\s+ikan", "tpi")
+  akhir_pos <- function(x, p) { l <- str_locate_all(x, p)[[1]]; if (nrow(l)) max(l[, 1]) else -1 }
+  p_lel <- akhir_pos(b_lel, KATA_RUPIAH[["hasil_lelang"]])
+  if (p_lel > 0 && !str_detect(s, per_liter) && !str_detect(s, per_wadah) && p_lel > akhir_pos(b_lel, "denda|biaya\\s+perkara"))
+    return(if (str_detect(str_to_lower(kal), "bersama-sama|gabungan|perkara\\s+(?!ini\\b|a\\s*quo\\b|tersebut\\b)")) "lelang_gabungan" else "hasil_lelang")
   # Uang yang diserahkan/modal/bukti transfer bukan nilai BBM.
-  if (str_detect(str_sub(b, -70), "(memberi(kan)?|diberi(kan)?|menyerahkan|diserahkan|modal|pinjam)\\b[^;]{0,40}$|uang\\s+(sejumlah|sebesar|senilai)?\\s*$") ||
+  if (str_detect(str_sub(b, -70), "(memberi(kan)?|diberi(kan)?|menyerahkan|diserahkan|modal|pinjam)\\b[^;]{0,40}$") ||
       str_detect(str_sub(b, -80), "bukti\\s+transfer|print\\s*out|kwitansi|kuitansi|faktur|\\bnota\\b|struk|rekening\\s+koran|slip"))
     return("lain")
   if (str_detect(s, per_wadah) || str_detect(str_sub(b, -60), paste0("(per\\s*|setiap\\s+|tiap\\s+|satu\\s+|\\b1\\s*(\\(satu\\)\\s*)?)", WADAH_HARGA, "\\b[^;]{0,40}$")))
@@ -978,7 +1053,8 @@ harga_beli <- function(sebelum) {
 }
 
 nominal_uang <- function(teks) {
-  kosong <- tibble(nilai = numeric(), mata_uang = character(), jenis = character(), beli = logical(), konteks = character())
+  kosong <- tibble(nilai = numeric(), mata_uang = character(), jenis = character(), beli = logical(), vol_total = numeric(),
+                   konteks = character())
   if (is.na(teks) || !nzchar(teks)) return(kosong)
   angka_usd <- function(g) vapply(g, function(x) {
     x <- str_remove(str_trim(x), "[.,]+$")
@@ -996,6 +1072,8 @@ nominal_uang <- function(teks) {
     tibble(nilai = nilai, mata_uang = mu,
            jenis = map2_chr(sebelum, str_sub(teks, m[, 2] + 1, m[, 2] + 80), jenis_nominal),
            beli = vapply(sebelum, harga_beli, TRUE, USE.NAMES = FALSE),
+           # Volume total lelang gabungan ("dengan total 695 (...) liter ... hasil lelang Rp X").
+           vol_total = angka_id(str_match(str_to_lower(str_squish(sebelum)), "total\\s+(\\d{1,3}(?:\\.\\d{3})+|\\d+)\\s*(?:\\([^()]{0,80}liter\\s*\\)|liter)")[, 2]),
            konteks = str_squish(str_sub(teks, pmax(1, m[, 1] - 80), m[, 2] + 30)))
   }
   bind_rows(ambil(POLA_RUPIAH, "IDR"), ambil(POLA_USD, "USD")) |> filter(!is.na(nilai), nilai > 0)
@@ -1017,12 +1095,18 @@ nilai_kerugian <- function(teks, volume) {
   if (nrow(k)) return(hasil(k, "kerugian negara disebut putusan"))
   k <- pilih("hasil_lelang")
   if (nrow(k)) return(hasil(k, "hasil lelang/penjualan barang bukti BBM"))
+  k <- u[u$jenis == "lelang_gabungan" & u$mata_uang == "IDR" & !is.na(u$vol_total), ]
+  if (nrow(k) && !is.na(volume$nilai) && identical(volume$satuan, "liter") && volume$nilai <= k$vol_total[1])
+    return(list(nilai = round(k$nilai[1] * volume$nilai / k$vol_total[1]), mata_uang = "IDR",
+                dasar = paste0("hasil lelang gabungan beberapa perkara, dibagi pro rata: Rp", k$nilai[1], " x ", volume$nilai, "/",
+                               k$vol_total[1], " liter (\"", k$konteks[1], "\")")))
   h <- u[u$jenis == "harga_per_liter" & u$mata_uang == "IDR" & u$nilai >= 1000 & u$nilai <= 50000, ]
   if (nrow(h) && !is.na(volume$nilai) && identical(volume$satuan, "liter")) {
     beli <- h[h$beli, ]
     if (nrow(beli)) { harga <- min(beli$nilai); asal <- "harga beli" } else { harga <- min(h$nilai); asal <- "harga per liter terendah yang disebut" }
+    sumber <- if (nrow(beli)) beli else h
     return(list(nilai = round(volume$nilai * harga), mata_uang = "IDR",
-                dasar = paste0("dihitung: volume ", volume$nilai, " liter x ", asal, " Rp", harga, "/liter (\"", h$konteks[h$nilai == harga][1], "\")")))
+                dasar = paste0("dihitung: volume ", volume$nilai, " liter x ", asal, " Rp", harga, "/liter (\"", sumber$konteks[sumber$nilai == harga][1], "\")")))
   }
   k <- pilih("nilai_transaksi")
   k <- k[str_detect(k$konteks, regex(KATA_BBM_KONTEKS, ignore_case = TRUE)), ]
@@ -1098,7 +1182,7 @@ LEWATI_NAMA <- c("Tersebut", "Telah", "Tidak", "Dan", "Dengan", "Pada", "Di", "K
                  "Polri", "Polairud", "Ditpolairud", "Ditreskrimsus", "Satreskrim", "Petugas", "Anggota", "Tim", "Unit",
                  "Dinas", "Kantor", "Bank", "Badan", "Balai", "Kementerian", "Pemerintah", "Bupati", "Gubernur", "Camat",
                  "Kepala", "Ketua", "Panitera", "Notaris", "Penasihat", "Advokat", "Kuasa", "Hukum", "Terdakwa", "Terpidana",
-                 "Tersangka", "Saksi", "Pembanding", "Terbanding", "Termohon", "Oditur", "Militer", "Mahkamah", "Agung",
+                 "Tersangka", "Saksi", "Pembanding", "Terbanding", "Termohon", "Oditur", "Militer", "Mahkamah",
                  "Republik", "Indonesia", "Undang", "Pasal", "Bea", "Cukai", "Syahbandar", "TNI", "BPH", "Migas", "Pertamax",
                  "Pertalite", "Premium", "Solar", "Biosolar", "Dexlite", "BBM", "Minyak", "Bahan", "Bakar")
 # Kata yang mengakhiri rangkaian nama (tidak peka huruf besar/kecil), termasuk kata amar dalam huruf kapital:
@@ -1108,10 +1192,10 @@ KATA_HENTI_NAMA <- c(LEWATI_NAMA, "Terbukti", "Bersalah", "Secara", "Sah", "Meya
                      "Atau", "Maupun", "Sama", "Tetap", "Ditahan", "Tahanan", "Dipidana", "Menyatakan", "Menjatuhkan",
                      "Membebaskan", "Melepaskan", "Menetapkan", "Membebankan", "Memerintahkan", "Menolak", "Menerima",
                      "Membatalkan", "Menguatkan", "Mengadili", "Menimbang", "Mengingat", "Membaca", "Memperhatikan",
-                     "Mendengar", "Bahwa", "Demikian", "Putusan", "Nomor", "Halaman", "Hari", "Tanggal", "Bulan", "Tahun",
-                     "Sekitar", "Pukul", "Liter", "Jerigen", "Jeriken", "Drum", "Unit", "Buah", "Dengan", "Bin", "Binti",
-                     "Als", "Alias", NAMA_BULAN, "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu",
-                     "Sdr", "Sdri", "Saudara", "Saudari", "Menteri", "Kementrian", "Pejabat", "Penasehat", "Panasihat",
+                     "Mendengar", "Bahwa", "Demikian", "Demikianlah", "Putusan", "Nomor", "Halaman", "Tanggal", "Bulan",
+                     "Tahun", "Sekitar", "Pukul", "Liter", "Jerigen", "Jeriken", "Drum", "Unit", "Buah", "Dengan",
+                     "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu",
+                     "Sdr", "Sdri", "Sdra", "Saudara", "Saudari", "Menteri", "Kementrian", "Pejabat", "Penasehat", "Panasihat",
                      "Wilayah", "Direktorat", "Direktur", "Jurusita", "Juru", "Wakil", "Kasat", "Kapolsek", "Kapolres",
                      "Kapolda", "Plh", "Plt", "Perusahaan", "Lembaga", "KUHAP", "KUHP", "CCTV", "Pihak", "BU", "UPTD",
                      "Pengurus", "Pimpinan", "Penangkapan", "Mabes", "SKPD", "Instansi", "Lurah", "Danrem", "Komandan",
@@ -1120,31 +1204,53 @@ KATA_HENTI_NAMA <- c(LEWATI_NAMA, "Terbukti", "Bersalah", "Secara", "Sah", "Meya
                      "Tuntutan", "Memori", "Kontra", "Akta", "Berita", "Laporan", "Dakwaan", "Hasil", "Peraturan",
                      "Bahasa", "Mobil", "Truk", "Tangki", "Pangkalan", "Barang", "Bukti", "Rekening", "Mandor", "Komite",
                      "Aparat", "Universitas", "Pulau", "Muara", "Muaro", "Teluk", "Tanjung", "Kuala", "Jawa", "Sumatera",
-                     "Kalimantan", "Sulawesi", "Papua", "Maluku", "Nusa", "Bali", "Riau", "Aceh")
-KATA_HENTI_NAMA <- setdiff(unique(KATA_HENTI_NAMA), c("Bin", "Binti", "Als", "Alias"))
-POLA_HENTI_NAMA <- paste0("(?!(?i:", paste(str_replace_all(KATA_HENTI_NAMA, "\\.", "\\\\."), collapse = "|"), ")\\b)")
+                     "Kalimantan", "Sulawesi", "Papua", "Maluku", "Nusa", "Bali", "Riau", "Aceh", "Jakarta",
+                     # Kata di awal baris/kalimat yang sering menyusul nama, dan kata yang bukan nama setelah dari/kepada.
+                     "Rp", "Bertempat", "Berlokasi", "Tempat", "Pekerjaan", "Umur", "Nopol", "Dikembalikan", "Adapun",
+                     "Bensin", "Bio", "POM", "Lemigas",
+                     # Label identitas terdakwa ("Terdakwa II.\nNama : ...", "Jenis Kelamin", "Agama").
+                     "Nama", "Lengkap", "Lahir", "Jenis", "Kelamin", "Kebangsaan", "Kewarganegaraan", "Agama", "Alamat",
+                     "Pendidikan")
+# "Hari", "Hakim" dan nama bulan juga nama diri (Hari Purwanto, Abdul Hakim, Juli Astuti): hanya menghentikan nama
+# dalam konteksnya ("Hari Senin", "Hakim Ketua", "Juli 2020"). "Agung" dihentikan oleh "Mahkamah/Jaksa" di depannya.
+KATA_HENTI_NAMA <- setdiff(unique(KATA_HENTI_NAMA), c("Bin", "Binti", "Als", "Alias", "Hakim"))
+HENTI_KONTEKS <- paste0(
+  "|Hari\\b(?=[ \\t]*(?i:senin|selasa|rabu|kamis|jumat|sabtu|minggu|tanggal|itu|ini|ke|kerja|raya|libur|dan|yang)\\b)",
+  "|Hakim\\b(?=[ \\t]*(?i:ketua|anggota|tunggal|pengadilan|tinggi|agung|yang|pembanding|pertama|tingkat|ad|militer|majelis)\\b)",
+  "|(?:", paste(NAMA_BULAN, collapse = "|"), ")\\b(?=[ \\t]*(?:\\d|(?i:tahun|sampai|hingga|s\\.?d|dan|lalu|ini|itu)\\b|[,.;\\n]|$))")
+POLA_HENTI_NAMA <- paste0("(?!(?i:", paste(str_replace_all(KATA_HENTI_NAMA, "\\.", "\\\\."), collapse = "|"), ")\\b", HENTI_KONTEKS, ")")
 # Kata tempat menghentikan nama: "Rumah Terdakwa Budi Desa X" -> "Rumah Terdakwa [nama] Desa X".
 KATA_TEMPAT <- "(?:Desa|Dusun|Jorong|Nagari|Kelurahan|Kel|Kecamatan|Kec|Kabupaten|Kab|Kota|Jalan|Jl|RT|RW|Gampong|Kampung|Provinsi|Prov|Pelabuhan|Dermaga|SPBU|SPBN|SPDN|PT|CV|UD|KUD|Gudang|Toko|Pasar|Perairan|Sungai|Kapal|KM)\\b"
-# Satu huruf kapital hanya dianggap inisial bila tidak diikuti huruf tunggal lain ("M E N G A D I L I").
-KATA_NAMA <- paste0("(?!", KATA_TEMPAT, ")", POLA_HENTI_NAMA, "(?:[A-Z][A-Za-z'.\\-]+|[A-Z]\\b(?![ \\t]+[A-Z]\\b))")
-# Nama berlanjut ke baris berikutnya hanya bila kata berikutnya huruf kapital dan baris sebelumnya berakhir dengan
-# kata kapital, bin/alias atau "(Alm)" ("AHMAD\nZAILANI", "Bin (Alm)\nSUWARTO").
-ANTAR_NAMA <- "(?:[ \\t]+|(?<=[A-Z]{2}|(?i:bin|binti|als|alias)|\\))[ \\t]*\\n[ \\t]*(?=[A-Z]{2,}\\b))"
-SAMBUNG_NAMA <- "(?i:bin|binti|als\\.?|alias)\\b(?:[ \\t]*\\((?i:alm|almarhum|almh|almarhumah)\\.?\\))?"
+# Kata nama: huruf kapital di awal dan utuh sampai batas kata, jadi "Rp500" dan "K-1610-LN" bukan nama. Satu huruf
+# kapital hanya inisial bila tidak diikuti huruf tunggal lain ("M E N G A D I L I"). Angka Romawi saja ("terdakwa II")
+# bukan nama, kecuali diikuti nama ("I Made", "I. DWI ARMADI").
+KATA_NAMA <- paste0("(?!", KATA_TEMPAT, ")(?![IVX]{1,4}\\b(?![ \\t]*\\.?[ \\t]*[A-Z]))", POLA_HENTI_NAMA,
+                    "(?:[A-Z][A-Za-z'.\\-]+(?![A-Za-z0-9])|[A-Z]\\b(?![ \\t]+[A-Z]\\b)(?![A-Za-z0-9\\-]))")
+# Nama berlanjut melewati baris baru ke kata berhuruf kapital ("Syarif\nSyahrial"), dan melewati titik tanpa spasi
+# ("Als.Jek").
+ANTAR_NAMA <- "(?:[ \\t]+|(?<=\\.)(?=[A-Z])|(?<=[A-Za-z.)])[ \\t]*\\n[ \\t]*(?=[A-Z][A-Za-z]))"
+ANAK <- "(?i:anak(?:\\s+kandung)?(?:\\s+dari)?(?:\\s+(?:bapak|ibu))?)\\b"
+# Penyambung nama: bin/binti/als/alias (dengan "(Alm)"), panggilan, "anak (dari) (Bapak)".
+SAMBUNG_NAMA <- paste0("(?:(?i:bin|binti|als|alias)\\b\\.?(?:[ \\t]*\\((?i:alm|almarhum|almh|almarhumah)\\.?\\))?|",
+                       "(?i:panggilan|pgl)\\b\\.?|", ANAK, ")")
 POLA_NAMA <- paste0(
-  "\\b((?i:terdakwa|terpidana|tersangka|saksi|sdr\\.?|sdri\\.?|saudara|saudari|atas\\s+nama|a\\.n\\.?|milik|bin|binti|",
-  "als\\.?|alias|nama(?:\\s+lengkap)?\\s*:)|dari|kepada|oleh)",
-  # "Terdakwa II", "Bin (Alm)", "kepada Bapak"
-  "((?:[ \\t]+(?:[IVX]{1,4}|\\d{1,2})\\b)?(?:[ \\t]*\\((?i:alm|almarhum|almh|almarhumah)\\.?\\))?(?:[ \\t]+(?:Bapak|Ibu|Pak|Bu)\\b\\.?)?)(?:\\s+|(?<=\\.))",
-  # Rangkaian nama (berhenti di kata henti, kata tempat, atau baris baru kecuali di antara kata kapital).
-  "(", KATA_NAMA, "(?:", ANTAR_NAMA, "(?:", SAMBUNG_NAMA, "|", KATA_NAMA, "))*)")
-# Nama huruf kapital sebelum "Als"/"alias" tanpa kata pemicu: "ARIS WADI Als ..." -> "[nama] Als ...".
-KATA_KAPITAL <- paste0("(?!", KATA_TEMPAT, ")(?![IVX]{1,4}\\b)", POLA_HENTI_NAMA, "[A-Z][A-Z'.\\-]+")
+  "\\b((?i:terdakwa|terpidana|tersangka|saksi|sdr[ai]?\\.?|saudara|saudari|(?:atas\\s+)?nama\\s+pemilik\\s*:?|atas\\s+nama|",
+  "a\\.?n\\.?|milik|bin|binti|als\\.?|alias|nama(?:\\s+lengkap)?\\s*:|pak|bapak|bpk\\.?)|", ANAK, "|dari|kepada|oleh)",
+  # "Terdakwa II", "Terdakwa 1.", "Saksi-1", "Bin (Alm)", "kepada Bapak". Nomor urut tidak dipakai setelah
+  # dari/kepada/oleh ("Halaman 17 dari 18").
+  "((?:[ \\t]*-?[ \\t]*[IVX]{1,4}\\b\\.?|(?<!dari|kepada|oleh)[ \\t]*-?[ \\t]*\\d{1,2}\\b\\.?)?",
+  "(?:[ \\t]*\\((?i:alm|almarhum|almh|almarhumah)\\.?\\))?(?:[ \\t]+(?i:bapak|ibu|pak|bu|bpk)\\b\\.?)?)",
+  # Pemisah: spasi, titik ("Sdr.Wongso"), atau tanpa spasi bila teks PDF menempel ("TerdakwaHardi").
+  "(?:\\s+|(?<=\\.)|(?<=[a-z])(?=[A-Z]))",
+  # Rangkaian nama (berhenti di kata henti dan kata tempat). Penyambung (bin/alias/anak) selalu diikuti nama.
+  "(", KATA_NAMA, "(?:", ANTAR_NAMA, "(?:", SAMBUNG_NAMA, "(?:\\s+|(?<=\\.)))?", KATA_NAMA, "|", ANTAR_NAMA, SAMBUNG_NAMA, ")*)")
+# Nama sebelum "Als"/"alias" tanpa kata pemicu: "ARIS WADI Als ...", "rumah Yayat alias ..." -> "[nama] Als ...".
+KATA_KAPITAL <- paste0("(?!", KATA_TEMPAT, ")(?![IVX]{1,4}\\b)", POLA_HENTI_NAMA, "[A-Z][A-Za-z'.\\-]+(?![A-Za-z0-9])")
 POLA_NAMA_ALIAS <- paste0("\\b", KATA_KAPITAL, "(?:[ \\t]+", KATA_KAPITAL, "){0,3}(?=[ \\t]+(?i:als\\.?|alias)\\b)")
 
 samarkan_nama <- function(x) {
-  # Nama orang setelah terdakwa/terpidana/saksi/Sdr./milik/atas nama/bin/alias/dari/kepada/oleh (termasuk
-  # "Terdakwa I NAMA", "Bin (Alm) NAMA") dan nama kapital sebelum "Als" diganti [nama]. Dijalankan pada teks
+  # Nama orang setelah terdakwa/terpidana/saksi/Sdr./milik/atas nama/an./nama pemilik/bin/alias/anak/pak/dari/
+  # kepada/oleh (termasuk "Terdakwa I NAMA", "Bin (Alm) NAMA") dan nama sebelum "Als" diganti [nama]. Dijalankan pada teks
   # lengkap sebelum potongan teks diambil, agar tidak ada nama terpotong. Kolom hasil putusan dibaca dari teks asli.
   if (is.null(x) || length(x) == 0 || is.na(x)) return(x)
   x <- str_replace_all(x, POLA_NAMA_ALIAS, "[nama]")
@@ -1159,6 +1265,10 @@ samarkan_nama <- function(x) {
 # -----------------------------------------------------------------------------
 # 6. REKAP SATU PUTUSAN
 # -----------------------------------------------------------------------------
+# Versi aturan ekstraksi. Baris semua_putusan_diperiksa.csv dari versi lain dihitung ulang saat penelusuran
+# dilanjutkan (dari cache HTML dan PDF di disk), agar perbaikan ekstraksi dan penyamaran nama ikut berlaku.
+VERSI_EKSTRAKSI <- "2026-10-08"
+
 KOLOM_REKAP <- c("tahun_putusan", "tahun_kejadian", "tingkat_persidangan", "hasil_putusan", "lokasi_kejadian",
                  "barang_bbm", "nilai_kerugian_uang", "mata_uang", "nilai_kerugian_volume", "satuan_volume",
                  "nomor_putusan", "pengadilan", "tanggal_putusan", "provinsi", "kabupaten_kota", "dasar_lokasi",
@@ -1271,7 +1381,8 @@ rekap_putusan <- function(ov = list(), teks = NA_character_, file_pdf = NA_chara
     url_putusan = ov$url %||% NA_character_,
     sumber_daftar = sumber_daftar,
     # Id putusan terkait (PN/PT/MA satu perkara) untuk melengkapi overview tanpa PDF; tidak ditulis ke rekap.
-    id_terkait = if (length(ov$terkait)) paste(id_putusan(ov$terkait), collapse = ";") else NA_character_
+    id_terkait = if (length(ov$terkait)) paste(id_putusan(ov$terkait), collapse = ";") else NA_character_,
+    versi_ekstraksi = VERSI_EKSTRAKSI
   )
 }
 
@@ -1285,15 +1396,21 @@ lengkapi_rantai <- function(semua) {
   id <- id_putusan(semua$url_putusan)
   tautan <- str_split(ifelse(is.na(semua$id_terkait), "", semua$id_terkait), ";")
   peringkat <- function(t) match(t, c("PN", "Pengadilan Militer", "PT", "MA"))
+  # Rantai perkara = semua putusan yang terhubung lewat tautan (dua arah, berantai: PN -> PT -> MA).
+  tetangga <- lapply(seq_along(id), function(i) which(id %in% tautan[[i]] | vapply(tautan, function(t) id[i] %in% t, TRUE)))
+  komponen <- function(i) { k <- i; repeat { b <- unique(c(k, unlist(tetangga[k]))); if (length(b) == length(k)) return(k); k <- b } }
   for (i in which(semua$sumber_data == "Overview direktori" & !is.na(id))) {
-    j <- which(id %in% tautan[[i]] | vapply(tautan, function(t) id[i] %in% t, TRUE))
-    j <- setdiff(j, i)
-    j <- j[semua$sumber_data[j] == "PDF putusan" & semua$relevan_bbm[j] == "Ya"]
+    rantai <- setdiff(komponen(i), i)
+    j <- rantai[semua$sumber_data[rantai] == "PDF putusan" & semua$relevan_bbm[rantai] == "Ya"]
     if (!length(j)) next
     j <- j[order(peringkat(semua$tingkat_persidangan[j]))]
     sumber <- function(k) paste0(" (dari putusan terkait ", semua$nomor_putusan[k], ")")
     k <- j[1]
-    for (kol in c("tahun_kejadian", "barang_bbm", "jenis_bbm_disebut")) if (is.na(semua[[kol]][i])) semua[[kol]][i] <- semua[[kol]][k]
+    for (kol in c("tahun_kejadian", "barang_bbm", "jenis_bbm_disebut")) {
+      # Jenis BBM umum dari overview ("BBM (jenis tidak disebut)") diganti jenis dari PDF rantai perkara.
+      kosong <- is.na(semua[[kol]][i]) || (kol == "barang_bbm" && semua[[kol]][i] %in% c("BBM (jenis tidak disebut)", "Bensin (jenis tidak disebut)"))
+      if (kosong && !is.na(semua[[kol]][k])) semua[[kol]][i] <- semua[[kol]][k]
+    }
     if (is.na(semua$nilai_kerugian_volume[i]) && !is.na(semua$nilai_kerugian_volume[k])) {
       semua$nilai_kerugian_volume[i] <- semua$nilai_kerugian_volume[k]; semua$satuan_volume[i] <- semua$satuan_volume[k]
       semua$dasar_volume[i] <- paste0(semua$dasar_volume[k], sumber(k))
@@ -1307,7 +1424,11 @@ lengkapi_rantai <- function(semua) {
       semua$dasar_lokasi[i] <- paste0(semua$dasar_lokasi[k], sumber(k))
     }
     if (is.na(semua$hasil_putusan[i]) && str_detect(semua$dasar_hasil[i] %||% "", "ikut putusan sebelumnya")) {
-      bawah <- j[peringkat(semua$tingkat_persidangan[j]) < peringkat(semua$tingkat_persidangan[i]) & !is.na(semua$hasil_putusan[j])]
+      # Hasil dari tingkat di bawahnya yang terdekat, termasuk overview tanpa PDF (mis. PT yang membebaskan), asal
+      # hasil itu putusannya sendiri (bukan salinan dari putusan terkait). Tingkat yang tidak diketahui dilewati.
+      bawah <- rantai[which(peringkat(semua$tingkat_persidangan[rantai]) < peringkat(semua$tingkat_persidangan[i]) &
+                              !is.na(semua$hasil_putusan[rantai]) &
+                              !str_detect(coalesce(semua$dasar_hasil[rantai], ""), fixed("(dari putusan terkait")))]
       bawah <- bawah[order(-peringkat(semua$tingkat_persidangan[bawah]))]
       if (length(bawah)) {
         semua$hasil_putusan[i] <- semua$hasil_putusan[bawah[1]]
@@ -1412,17 +1533,38 @@ telusuri <- function(daftar, cfg, keluaran) {
   if (is.null(daftar) || !nrow(daftar)) daftar <- tibble(id = character(), url = character(), nomor = character(),
                                                          tanggal_putus = character(), sumber_daftar = character())
   antre <- daftar |> filter(!is.na(id)) |> kolom_antre()
-  ulang <- NULL
+  ulang <- NULL; terkait_lama <- NULL
   if (!is.null(selesai)) {
-    # Putusan (tahun dalam rentang) yang PDF-nya gagal diunduh pada putaran sebelumnya diperiksa ulang dengan
-    # sumber daftar aslinya. Baris lama baru diganti bila pemeriksaan ulang menghasilkan baris baru.
+    # Kolom potongan teks dari versi sebelumnya disamarkan ulang sebelum ditulis lagi.
+    selesai <- samarkan_kolom(selesai)
+    # Diperiksa ulang dengan sumber daftar aslinya (tahun dalam rentang); baris lama baru diganti bila pemeriksaan
+    # ulang menghasilkan baris baru:
+    #  - PDF gagal diunduh (bukan PDF yang sudah ada tetapi tanpa teks, mis. hasil pindai);
+    #  - baris dari versi aturan ekstraksi lain (dihitung ulang dari cache HTML dan PDF di disk).
     th <- suppressWarnings(as.integer(selesai$tahun_putusan))
-    u <- selesai$lampiran_pdf %in% "Ada" & !selesai$sumber_data %in% "PDF putusan" & (is.na(th) | th %in% cfg$tahun) &
-      !is.na(id_putusan(selesai$url_putusan))
+    sah <- (is.na(th) | th %in% cfg$tahun) & !is.na(id_putusan(selesai$url_putusan))
+    kolom <- function(k) if (k %in% names(selesai)) selesai[[k]] else rep(NA_character_, nrow(selesai))
+    pdf_ada <- vapply(kolom("file_pdf"), function(f) !is.na(f) && pdf_terbaca(file.path(keluaran, f)), TRUE, USE.NAMES = FALSE)
+    gagal_pdf <- sah & selesai$lampiran_pdf %in% "Ada" & !selesai$sumber_data %in% "PDF putusan" & !pdf_ada
+    versi_lama <- sah & !kolom("versi_ekstraksi") %in% VERSI_EKSTRAKSI
+    u <- gagal_pdf | versi_lama
     if (any(u)) ulang <- tibble(id = id_putusan(selesai$url_putusan[u]), url = selesai$url_putusan[u], nomor = selesai$nomor_putusan[u],
                                 tanggal_putus = NA_character_, sumber_daftar = selesai$sumber_daftar[u])
+    if (any(gagal_pdf)) pesan(sum(gagal_pdf), " putusan yang PDF-nya gagal diunduh sebelumnya diperiksa ulang")
+    if (any(versi_lama & !gagal_pdf)) pesan(sum(versi_lama & !gagal_pdf), " putusan dari versi skrip sebelumnya dihitung ulang (dari cache)")
   }
   sudah <- if (is.null(selesai)) character(0) else setdiff(id_putusan(selesai$url_putusan), ulang$id)
+  # Putusan terkait dari putusan yang sudah diperiksa, yang belum pernah terekam (penelusuran sebelumnya terhenti,
+  # atau halaman overview-nya gagal diambil), dimasukkan lagi ke antrean dari kolom id_terkait (tanpa akses situs).
+  if (!is.null(selesai) && isTRUE(cfg$ikuti_terkait) && "id_terkait" %in% names(selesai)) {
+    t <- unique(unlist(str_split(na.omit(selesai$id_terkait), ";")))
+    t <- setdiff(t[nzchar(t)], c(sudah, antre$id, ulang$id))
+    if (length(t)) {
+      terkait_lama <- tibble(id = t, url = url_kanonik(paste0("/direktori/putusan/", t, ".html"), cfg), nomor = NA_character_,
+                             tanggal_putus = NA_character_, sumber_daftar = "putusan terkait")
+      pesan(length(t), " putusan terkait yang belum terekam dimasukkan lagi ke antrean")
+    }
+  }
   # Lanjutkan antrean yang tersisa saat penelusuran sebelumnya dihentikan (mis. CAPTCHA), dengan sumber daftar
   # aslinya. Baris daftar putaran ini didahulukan, sehingga label aslinya tidak tertimpa.
   sisa <- NULL
@@ -1436,8 +1578,7 @@ telusuri <- function(daftar, cfg, keluaran) {
     sisa <- sisa |> filter(!is.na(id)) |> kolom_antre()
     pesan(nrow(sisa), " URL dari antrean tersisa dilanjutkan")
   }
-  antre <- bind_rows(antre, if (!is.null(ulang)) kolom_antre(ulang), sisa) |> distinct(id, .keep_all = TRUE)
-  if (!is.null(ulang)) pesan(nrow(ulang), " putusan yang PDF-nya gagal diunduh sebelumnya diperiksa ulang")
+  antre <- bind_rows(antre, if (!is.null(ulang)) kolom_antre(ulang), sisa, terkait_lama) |> distinct(id, .keep_all = TRUE)
   # Lewati entri daftar yang tanggal putusnya jelas di luar rentang tahun.
   th_daftar <- suppressWarnings(as.integer(str_extract(antre$tanggal_putus, "\\d{4}$")))
   antre <- antre[is.na(th_daftar) | th_daftar %in% cfg$tahun, ]
@@ -1474,7 +1615,7 @@ telusuri <- function(daftar, cfg, keluaran) {
     error = function(e) { gagal[[length(gagal) + 1]] <<- tibble(url = it$url, galat = conditionMessage(e)); NULL })
     if (inherits(r, "penanda_captcha")) {
       simpan_kemajuan(selesai, baris, berkas_kemajuan)
-      if (length(gagal)) write_csv(bind_rows(gagal), file.path(keluaran, "log_gagal.csv"))
+      catat_gagal(gagal, keluaran)
       write_excel_csv(bind_rows(it, antre) |> select(id, url, nomor, tanggal_putus, sumber_daftar), berkas_antrean, na = "NA")
       if (file.exists(berkas_antrean_lama)) unlink(berkas_antrean_lama)
       stop(r$kondisi)
@@ -1486,9 +1627,25 @@ telusuri <- function(daftar, cfg, keluaran) {
     if (length(baris) && length(baris) %% 25 == 0) simpan_kemajuan(selesai, baris, berkas_kemajuan)
   }
   semua <- simpan_kemajuan(selesai, baris, berkas_kemajuan)
-  if (length(gagal)) write_csv(bind_rows(gagal), file.path(keluaran, "log_gagal.csv"))
+  catat_gagal(gagal, keluaran)
   unlink(c(berkas_antrean, berkas_antrean_lama))
   semua
+}
+
+samarkan_kolom <- function(d) {
+  # Penyamaran ulang kolom potongan teks (mis. baris dari versi skrip sebelumnya). Teks yang sudah disamarkan tetap.
+  for (k in intersect(c("lokasi_kejadian", "dasar_lokasi", "dasar_volume", "dasar_nilai_uang"), names(d)))
+    d[[k]] <- vapply(as.character(d[[k]]), function(x) if (is.na(x)) NA_character_ else samarkan_nama(x), "", USE.NAMES = FALSE)
+  d
+}
+
+catat_gagal <- function(gagal, keluaran) {
+  # log_gagal.csv ditambah (bukan ditimpa), agar riwayat kegagalan putaran sebelumnya tidak hilang.
+  if (!length(gagal)) return(invisible(NULL))
+  f <- file.path(keluaran, "log_gagal.csv")
+  lama <- if (file.exists(f)) read_csv(f, show_col_types = FALSE, col_types = cols(.default = "c")) else NULL
+  baru <- mutate(bind_rows(gagal), waktu = format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+  write_csv(bind_rows(lama, mutate(baru, across(everything(), as.character))), f, na = "NA")
 }
 
 simpan_kemajuan <- function(selesai, baris, berkas) {
@@ -1502,7 +1659,7 @@ simpan_kemajuan <- function(selesai, baris, berkas) {
 
 tulis_rekap <- function(semua, cfg, keluaran, nama = "rekap_kriminalitas_BBM_MA_2020_2026.csv") {
   if (is.null(semua) || !nrow(semua)) { pesan("Tidak ada putusan yang terekap."); return(invisible(NULL)) }
-  semua <- lengkapi_rantai(semua) |> mutate(tahun_putusan = suppressWarnings(as.integer(tahun_putusan)),
+  semua <- lengkapi_rantai(semua) |> samarkan_kolom() |> mutate(tahun_putusan = suppressWarnings(as.integer(tahun_putusan)),
                            nilai_kerugian_uang = suppressWarnings(as.numeric(nilai_kerugian_uang)),
                            nilai_kerugian_volume = suppressWarnings(as.numeric(nilai_kerugian_volume)))
   # "Perlu dicek (tanpa PDF)": overview tanpa nama BBM, tetapi ditemukan lewat kata kunci BBM / klasifikasi Migas.
