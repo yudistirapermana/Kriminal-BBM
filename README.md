@@ -45,7 +45,12 @@ Rscript R/scrape_kriminalitas_bbm.R                       # pencarian kata kunci
 Rscript R/scrape_kriminalitas_bbm.R --mode=url --url=https://putusan3.mahkamahagung.go.id/direktori/putusan/1b6b7ad93106cdda7a17bcacf6917d0c.html
 Rscript R/scrape_kriminalitas_bbm.R --mode=html --html-dir=hasil_pencarian_tersimpan   # bila pencarian meminta CAPTCHA
 Rscript R/scrape_kriminalitas_bbm.R --mode=pdf-lokal --pdf-dir="Data Kriminal BBM/pdf"  # dari PDF yang sudah ada
+Rscript R/scrape_kriminalitas_bbm.R --mode=url --url-list=daftar_url.txt                 # satu URL per baris
 ```
+
+Di RStudio: `source("R/scrape_kriminalitas_bbm.R")`, lalu `main(c("--mode=cek"))` dan seterusnya. Tahun bisa ditulis
+`--tahun=2020:2026`, `--tahun=2020-2026` atau `--tahun=2021,2023`. Bila skrip berhenti (CAPTCHA/blokir), jalankan ulang
+perintah yang sama: putusan yang sudah diperiksa dilewati dan `antrean_tersisa.txt` dilanjutkan.
 
 **Keluaran** ada di `hasil_scrape_R/`:
 
@@ -63,6 +68,12 @@ Rscript R/scrape_kriminalitas_bbm.R --mode=pdf-lokal --pdf-dir="Data Kriminal BB
   yang tidak ditemukan ditulis `NA`.
 - `semua_putusan_diperiksa.csv`, `daftar_url.csv`, `log_gagal.csv`, folder `pdf/` dan `cache_html/` (penelusuran bisa
   dilanjutkan).
+- Mode `pdf-lokal` menulis ke berkas terpisah: `rekap_kriminalitas_BBM_pdf_lokal.csv` dan `semua_putusan_pdf_lokal.csv`.
+  Hasil mode ini untuk 87 PDF yang ada di repositori disimpan di `Data Kriminal BBM/hasil_scrape_R/` sebagai contoh
+  keluaran.
+
+Putusan tanpa PDF yang overview-nya tidak menyebut jenis BBM (misalnya MA "Menolak permohonan kasasi ..."), tetapi
+ditemukan lewat kata kunci BBM atau klasifikasi Migas, tetap masuk rekap dengan `relevan_bbm = "Perlu dicek (tanpa PDF)"`.
 
 Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila situs meminta CAPTCHA, skrip berhenti
 (tidak menembusnya) dan menyimpan antrean yang tersisa. Uji: `Rscript -e 'testthat::test_file("tests/R/test_scrape_kriminalitas_bbm.R")'`.
@@ -72,16 +83,23 @@ Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila 
 
 | Kolom | Terisi | Sama dengan rekap manual |
 |---|---|---|
+| relevan BBM (Ya) | 68/68 | 100% (tidak ada positif palsu di 19 PDF non-BBM) |
 | tahun_putusan | 68/68 | 100% |
 | tingkat_persidangan | 67/68 | 100% |
-| hasil_putusan | 66/68 | 100% |
+| hasil_putusan | 67/68 | 100% |
 | barang_bbm (jenis utama) | 68/68 | 98,5% |
-| tahun_kejadian | 46/68 | 91,3% |
-| nilai_kerugian_volume (±1%) | 61/68 | 70,5% |
+| provinsi | 67/68 | (terisi 98,5%) |
+| tahun_kejadian | 46/68 | 93,5% |
+| nilai_kerugian_volume (±1%) | 62/68 | 71% |
+| nilai_kerugian_uang (±1%) | 42/68 | 45% |
 
-Volume dan nilai uang paling sering berbeda dari pengodean manual: barang bukti sering ditulis sebagai jumlah wadah ×
-ukuran, atau ada beberapa angka (dipesan vs. disita). Periksa kolom `dasar_volume` dan `dasar_nilai_uang` sebelum
-memakai angka itu untuk analisis.
+Volume dan nilai uang paling sering berbeda dari pengodean manual:
+
+- Barang bukti sering ditulis sebagai jumlah wadah × ukuran, atau ada beberapa angka (dipesan vs. disita).
+- Untuk nilai uang, pengode manual kadang memakai dasar lain, misalnya hasil lelang, penjumlahan harga beli, atau
+  selisih harga.
+
+Periksa kolom `dasar_volume` dan `dasar_nilai_uang` sebelum memakai angka itu untuk analisis.
 
 ## Instalasi
 
