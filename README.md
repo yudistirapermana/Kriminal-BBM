@@ -109,7 +109,8 @@ liter" dihitung N × X, tetapi "kapasitas masing-masing X liter" tidak, dan tota
 Volume dan nilai uang paling sering berbeda dari pengodean manual:
 
 - Total gabungan dari beberapa pemasok atau rantai perkara yang hanya ada di rekap manual (mis. 22.100 L).
-- Minyak mentah bahan baku penyulingan ilegal tidak dihitung sebagai BBM (rekap manual menjumlahkannya: 46.000 vs 14.000 L).
+- Minyak mentah (bahan baku penyulingan ilegal) di luar cakupan kajian, jadi tidak dihitung sebagai volume BBM. Rekap
+  manual masih menjumlahkannya untuk rantai perkara Dumai (46.000 vs 14.000 L).
 - Untuk nilai uang, pengode manual kadang memakai dasar lain, misalnya penjumlahan harga beli dari beberapa sumber atau
   selisih harga. Skrip memakai urutan: kerugian negara, hasil lelang/penjualan langsung barang bukti, volume × harga
   beli per liter, lalu nilai transaksi BBM. Harga per jerigen/galon, uang yang diserahkan, dan angka di bukti transfer
