@@ -1,18 +1,38 @@
 REKAP PUTUSAN KRIMINALITAS BBM 2020-2026 (Direktori Putusan Mahkamah Agung)
 Kajian UGM - PT SICPA | Data diambil: 7 Oktober 2026 | Sumber: https://putusan3.mahkamahagung.go.id
+Diperbarui 7 Oktober 2026: angka di bawah disesuaikan dengan isi CSV terbaru (166 baris) dan dapat dihitung ulang
+dengan `python -m kriminal_bbm validate` (lihat README.md di akar repositori).
 
 ISI FOLDER
-- rekap_putusan_kriminalitas_BBM_2020-2026.csv : 155 baris, satu baris = satu putusan (UTF-8, pemisah koma).
-- pdf/ : 87 berkas PDF putusan (lampiran "Download PDF" di Direktori Putusan).
+- rekap_putusan_kriminalitas_BBM_2020-2026.csv : 166 baris, satu baris = satu putusan (UTF-8, pemisah koma).
+- putusan_dikeluarkan_tidak_relevan.csv : 35 putusan hasil penelusuran yang dikeluarkan karena objeknya bukan BBM
+  (LPG, minyak mentah, tambang, perkara narkotika yang salah taut, dll.), beserta alasannya.
+- pdf/ : 87 berkas PDF putusan (lampiran "Download PDF" di Direktori Putusan); 68 dirujuk rekap, 19 sisanya milik
+  putusan yang dikeluarkan.
+- hasil_olahan/ : keluaran kode (laporan validasi, kandidat dari teks PDF, dataset tingkat perkara, tabel ringkasan).
+  Jangan disunting manual; buat ulang dengan `python -m kriminal_bbm validate` lalu `python -m kriminal_bbm analyze`.
+- kurasi_kata_kunci_tinjauan.csv dan laporan_kurasi_kata_kunci.md : hasil kurasi kata kunci
+  (BBM/solar/biosolar/minyak tanah/pertalite) per putusan, 7 Oktober 2026.
 - BACA_SAYA_metodologi.txt : berkas ini.
 
 CAKUPAN DAN CARA PENELUSURAN
 1. Semua putusan pada klasifikasi Pidana Khusus > Migas dengan tahun putus 2020-2026 (84 putusan).
 2. Semua putusan lain dalam rantai perkara yang sama (PN -> PT -> MA, tautan "Putusan Terkait") yang diputus 2020-2026.
    Banyak di antaranya diklasifikasikan "Pidana Khusus Lain-lain", "Lingkungan Hidup", dll.
-Total: 155 putusan dalam 80 rantai perkara. Per tahun putusan: 2020: 58, 2021: 26, 2022: 24, 2023: 40, 2024: 6, 2025: 1.
-Per tingkat: MA: 63, PN: 57, PT: 34, Pengadilan Militer: 1. Sumber data: Overview: 68, PDF: 87.
-Relevansi BBM: NA: 4, Sebagian: 7, Tidak: 24, Ya: 120 (Ya = objek BBM; Sebagian = minyak mentah/kondensat/pengeboran ilegal; Tidak = LPG/gas/non-BBM).
+   Langkah 1-2 menghasilkan 155 putusan dalam 80 rantai perkara.
+3. Penyaringan relevansi BBM: dari 155 putusan, 120 "Ya" (objek BBM) dipertahankan; 35 dikeluarkan
+   (Tidak = LPG/gas/non-BBM: 24, Sebagian = minyak mentah/kondensat/pengeboran ilegal: 7, NA: 4) dan dicatat di
+   putusan_dikeluarkan_tidak_relevan.csv.
+4. Penambahan 46 putusan PN dari tabulasi tim (tabulasi kebocoran bbm subsidi_v3.xlsx), rantai X001-X046, hampir
+   seluruhnya diputus 2026. Baris ini tidak memiliki URL direktori maupun PDF di folder ini; nilainya diambil dari
+   tabulasi tim atas PDF putusan (lihat kolom sumber_data dan sumber_daftar).
+Total: 166 putusan dalam 107 rantai perkara (164 putusan unik; 2 entri ganda direktori sudah ditandai di kolom catatan).
+Per tahun putusan: 2020: 44, 2021: 21, 2022: 14, 2023: 35, 2024: 5, 2025: 1, 2026: 46.
+Per tingkat: PN: 92, PT: 26, MA: 47, Pengadilan Militer: 1.
+Per jalur penemuan (sumber_daftar): klasifikasi Migas: 65, putusan terkait (rantai Migas): 55, tabulasi tim: 46.
+Sumber data: PDF putusan: 52, PDF + data rantai: 15, Overview + PDF rantai: 6, Overview + data rantai: 34,
+Overview direktori: 13, tabulasi tim (dari PDF putusan): 46. Baris dengan berkas PDF di folder ini: 68.
+Relevansi BBM: semua baris rekap bernilai "Ya".
 
 KETERBATASAN PENTING
 - Pencarian kata kunci (BBM, biosolar, solar, pertalite, minyak tanah, dst.) di situs MA kini mewajibkan verifikasi
@@ -23,7 +43,13 @@ KETERBATASAN PENTING
   "BBM subsidi" sekitar 708 data). Sebagian besar perkara BBM diklasifikasikan di luar
   "Migas" (umumnya "Pidana Khusus Lain-lain"), sehingga dataset ini adalah SAMPEL, bukan populasi lengkap.
 - Satu perkara dapat muncul di beberapa baris (PN, PT, MA). Gunakan kolom rantai_perkara untuk menghitung perkara unik.
-- Klasifikasi Migas juga memuat perkara non-BBM (LPG, gas, pertambangan); saring dengan kolom relevan_bbm.
+- Klasifikasi Migas juga memuat perkara non-BBM (LPG, gas, pertambangan); yang demikian sudah dipindahkan ke
+  putusan_dikeluarkan_tidak_relevan.csv.
+- Putusan 2026 hampir seluruhnya berasal dari tabulasi tim, bukan dari klasifikasi Migas. Perbedaan jumlah antartahun
+  mencerminkan jalur penemuan data, bukan tren kriminalitas.
+- Beberapa rantai perkara adalah berkas terpisah (splitsing) untuk terdakwa berbeda dari SATU kejadian, mis. kapal
+  KM Cahaya Budi Makmur di PN Sibolga (3 rantai, masing-masing 60.000 liter). Untuk menjumlah volume, pakai kolom
+  kelompok_kejadian dan volume_liter_kelompok di hasil_olahan/rekap_perkara_unik.csv.
 
 DEFINISI KOLOM UTAMA (7 kolom permintaan)
 1. tahun_putusan        : tahun putusan dibacakan.
@@ -40,7 +66,7 @@ DEFINISI KOLOM UTAMA (7 kolom permintaan)
 7. nilai_kerugian_volume: total volume BBM objek perkara (angka) + satuan_volume + keterangan_volume.
 Kolom pendukung: nomor_putusan, pengadilan, tingkat_proses, tanggal_putusan, rincian_amar, relevan_bbm, sumber_data,
 lampiran_pdf, file_pdf, rantai_perkara, klasifikasi, sumber_daftar, url_putusan, bukti_kutipan (kutipan teks putusan), catatan.
-Nilai yang tidak ditemukan ditulis NA. Jumlah NA: barang_bbm: 2, hasil_putusan: 3, nilai_kerugian_uang: 67, nilai_kerugian_volume: 26, tahun_kejadian: 37.
+Nilai yang tidak ditemukan ditulis NA. Jumlah NA: barang_bbm: 0, hasil_putusan: 1, nilai_kerugian_uang: 42, nilai_kerugian_volume: 7, tahun_kejadian: 21.
 
 METODE EKSTRAKSI
 - Metadata dari halaman overview tiap putusan. Teks lengkap dari PDF lampiran (bila ada).
@@ -49,3 +75,30 @@ METODE EKSTRAKSI
 - Putusan tanpa PDF diisi dari overview; fakta perkara (tahun kejadian, jenis BBM, volume) boleh diambil dari putusan lain dalam
   rantai yang sama, dan ditandai di kolom sumber_data.
 - Nama terdakwa dan data pribadi tidak dicantumkan. Kutipan di kolom bukti_kutipan memungkinkan pemeriksaan cepat.
+- Kode Python di folder kriminal_bbm/ (akar repositori) mereplikasi alur ini: penelusuran direktori dan rantai perkara,
+  pengunduhan PDF, ekstraksi teks tanpa watermark, kandidat nilai kolom berbasis aturan, pemeriksaan konsistensi,
+  dan modul opsional pengodean dengan Claude API (pengode + verifikator, kutipan dicek otomatis ke teks).
+
+DATASET TINGKAT PERKARA (hasil_olahan/rekap_perkara_unik.csv)
+- Satu baris = satu rantai perkara; entri ganda direktori dibuang dulu.
+- Fakta perkara (jenis BBM, volume, nilai uang, tahun kejadian) diambil dari putusan tingkat pertama bila ada, lalu
+  PT, lalu MA. hasil_akhir = status terdakwa pada putusan paling akhir yang ada di dataset.
+- provinsi: dari pengadilan tingkat pertama/banding; untuk rantai yang hanya berisi putusan MA, dari pengadilan asal
+  yang disebut di teks PDF (kolom sumber_provinsi).
+- status_subsidi: subsidi / penugasan (JBKP: Pertalite, Premium) / non-subsidi / campuran / tidak disebut,
+  diturunkan dari kolom barang_bbm. Kolom bbm_* adalah dummy jenis BBM (0/1).
+- pasal_uu_migas: pasal UU 22/2001 (53a-d, 54, 55) yang disebut di rincian_amar/catatan.
+- kelompok_kejadian: rantai dari pengadilan yang sama, selisih tahun putusan <= 2, dengan volume sama atau menyebut
+  kapal/perusahaan yang sama. Heuristik; alasan pengelompokan ada di kolom dasar_kelompok.
+
+KURASI KATA KUNCI (7 Oktober 2026)
+- Setiap putusan di rekap (166) dan di daftar dikeluarkan (35) diperiksa terhadap kata kunci BBM / solar / biosolar /
+  minyak tanah / pertalite. Frasa "bahan bakar minyak" dihitung sebagai BBM. Putusan dinyatakan berhubungan bila BBM
+  kata kunci adalah objek perkara, bukan sekadar disebut (mis. solar untuk alat tambang).
+- Situs MA tidak dapat diakses dari lingkungan kurasi, sehingga kata kunci diuji pada teks PDF putusan (diunduh dari situs),
+  kutipan verbatim di bukti_kutipan, atau PDF putusan lain dalam rantai yang sama. Penilaian dilakukan oleh agen AI
+  peninjau dan diverifikasi; rinciannya ada di laporan_kurasi_kata_kunci.md.
+- Hasil: 166 dari 166 putusan rekap berhubungan dengan kata kunci, jadi tidak ada baris yang dikeluarkan. 31 putusan di
+  daftar dikeluarkan tetap dikeluarkan dan 4 tidak dapat dinilai karena tanpa teks.
+- 52 baris ditandai perlu_cek_situs: 46 baris tabulasi tim (tanpa URL/PDF) dan 6 baris yang hanya memuat frasa lengkap
+  "bahan bakar minyak". Cek ulang ke situs: python -m kriminal_bbm curate --online.

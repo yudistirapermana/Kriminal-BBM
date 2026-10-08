@@ -1,0 +1,9 @@
+# cache HTML/teks dan hasil penelusuran mentah (bisa memuat nama terdakwa)
+cache/
+data_mentah/
+*.part
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
