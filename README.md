@@ -50,7 +50,8 @@ Rscript R/scrape_kriminalitas_bbm.R --mode=url --url-list=daftar_url.txt        
 
 Di RStudio: `source("R/scrape_kriminalitas_bbm.R")`, lalu `main(c("--mode=cek"))` dan seterusnya. Tahun bisa ditulis
 `--tahun=2020:2026`, `--tahun=2020-2026` atau `--tahun=2021,2023`. Bila skrip berhenti (CAPTCHA/blokir), jalankan ulang
-perintah yang sama: putusan yang sudah diperiksa dilewati dan `antrean_tersisa.txt` dilanjutkan.
+perintah yang sama: putusan yang sudah diperiksa dilewati, `antrean_tersisa.csv` dilanjutkan (dengan sumber daftar
+aslinya), dan putusan yang PDF-nya gagal diunduh dicoba lagi.
 
 **Keluaran** ada di `hasil_scrape_R/`:
 
@@ -65,15 +66,22 @@ perintah yang sama: putusan yang sudah diperiksa dilewati dan `antrean_tersisa.t
   8. `nilai_kerugian_volume` + `satuan_volume`
 
   Kolom pendukung: nomor, pengadilan, provinsi, dan kolom `dasar_*` yang berisi potongan teks sebagai jejak audit. Nilai
-  yang tidak ditemukan ditulis `NA`.
+  yang tidak ditemukan ditulis `NA`. Nama orang di potongan teks diganti `[nama]`; hasil putusan dibaca dari teks asli,
+  sehingga penyamaran tidak menghapus kata amar.
 - `semua_putusan_diperiksa.csv`, `daftar_url.csv`, `log_gagal.csv`, folder `pdf/` dan `cache_html/` (penelusuran bisa
   dilanjutkan).
 - Mode `pdf-lokal` menulis ke berkas terpisah: `rekap_kriminalitas_BBM_pdf_lokal.csv` dan `semua_putusan_pdf_lokal.csv`.
   Hasil mode ini untuk 87 PDF yang ada di repositori disimpan di `Data Kriminal BBM/hasil_scrape_R/` sebagai contoh
   keluaran.
 
-Putusan tanpa PDF yang overview-nya tidak menyebut jenis BBM (misalnya MA "Menolak permohonan kasasi ..."), tetapi
-ditemukan lewat kata kunci BBM atau klasifikasi Migas, tetap masuk rekap dengan `relevan_bbm = "Perlu dicek (tanpa PDF)"`.
+Putusan tanpa PDF dinilai dari teks overview (Catatan Amar, Kata Kunci, Abstrak); satu sebutan BBM sudah cukup.
+Overview yang tidak menyebut BBM sama sekali (misalnya MA "Menolak permohonan kasasi ...") tetap masuk rekap bila:
+
+- ditemukan lewat kata kunci BBM atau klasifikasi Migas: `relevan_bbm = "Perlu dicek (tanpa PDF)"`;
+- satu rantai perkara (tautan "Putusan Terkait") dengan putusan yang PDF-nya relevan BBM:
+  `relevan_bbm = "Perlu dicek (putusan terkait BBM)"`. Kolom yang kosong (tahun kejadian, lokasi, barang, volume, nilai,
+  dan hasil putusan untuk PT/MA yang menguatkan/menolak kasasi penuntut umum) diisi dari putusan itu. Kolom `dasar_*`
+  menyebut nomor putusan sumbernya.
 
 Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila situs meminta CAPTCHA, skrip berhenti
 (tidak menembusnya) dan menyimpan antrean yang tersisa. Uji: `Rscript -e 'testthat::test_file("tests/R/test_scrape_kriminalitas_bbm.R")'`.
@@ -86,18 +94,27 @@ Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila 
 | relevan BBM (Ya) | 68/68 | 100% (tidak ada positif palsu di 19 PDF non-BBM) |
 | tahun_putusan | 68/68 | 100% |
 | tingkat_persidangan | 67/68 | 100% |
-| hasil_putusan | 67/68 | 100% |
-| barang_bbm (jenis utama) | 68/68 | 98,5% |
+| hasil_putusan | 68/68 | 100% |
+| barang_bbm (jenis utama) | 68/68 | 98,5% (label subsidi/non-subsidi: 20/20 sama) |
 | provinsi | 67/68 | (terisi 98,5%) |
-| tahun_kejadian | 46/68 | 93,5% |
-| nilai_kerugian_volume (±1%) | 62/68 | 71% |
-| nilai_kerugian_uang (±1%) | 42/68 | 45% |
+| tahun_kejadian | 46/68 | 91% |
+| nilai_kerugian_volume (±1%) | 65/68 | 83% |
+| nilai_kerugian_uang (±1%) | 43/68 | 58% |
+
+Kolom "Terisi" menghitung PDF yang nilainya terisi di hasil otomatis dan di rekap manual. Volume dibaca dengan urutan:
+butir barang bukti di amar; daftar "barang bukti berupa" yang dikutip; lalu angka di uraian perkara dengan skor konteks
+(disita/ditemukan/total didahulukan, pesanan/penjualan rutin/"non subsidi" dihindari). "N jerigen masing-masing berisi X
+liter" dihitung N × X, tetapi "kapasitas masing-masing X liter" tidak, dan total yang disebut didahulukan.
 
 Volume dan nilai uang paling sering berbeda dari pengodean manual:
 
-- Barang bukti sering ditulis sebagai jumlah wadah × ukuran, atau ada beberapa angka (dipesan vs. disita).
-- Untuk nilai uang, pengode manual kadang memakai dasar lain, misalnya hasil lelang, penjumlahan harga beli, atau
-  selisih harga.
+- Total gabungan dari beberapa pemasok atau rantai perkara yang hanya ada di rekap manual (mis. 22.100 L).
+- Minyak mentah (bahan baku penyulingan ilegal) di luar cakupan kajian, jadi tidak dihitung sebagai volume BBM. Rekap
+  manual masih menjumlahkannya untuk rantai perkara Dumai (46.000 vs 14.000 L).
+- Untuk nilai uang, pengode manual kadang memakai dasar lain, misalnya penjumlahan harga beli dari beberapa sumber atau
+  selisih harga. Skrip memakai urutan: kerugian negara, hasil lelang/penjualan langsung barang bukti, volume × harga
+  beli per liter, lalu nilai transaksi BBM. Harga per jerigen/galon, uang yang diserahkan, dan angka di bukti transfer
+  tidak dipakai.
 
 Periksa kolom `dasar_volume` dan `dasar_nilai_uang` sebelum memakai angka itu untuk analisis.
 

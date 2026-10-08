@@ -201,7 +201,7 @@ test_that("CAPTCHA saat mengunduh PDF juga menghentikan penelusuran", {
   keluaran <- tempfile("hasil_")
   expect_message(main(c("--mode=url", "--url=https://putusan3.mahkamahagung.go.id/direktori/putusan/1102e1cfc840bf73da0c2c1af05872e7.html",
                         paste0("--keluaran=", keluaran), "--jeda=0", "--tanpa-terkait")), "DIHENTIKAN")
-  expect_true(file.exists(file.path(keluaran, "antrean_tersisa.txt")))
+  expect_true(file.exists(file.path(keluaran, "antrean_tersisa.csv")))
 })
 
 
@@ -273,12 +273,181 @@ test_that("--url-list dan lanjutan antrean setelah CAPTCHA", {
     if (identical(id_putusan(url), id_pn)) ov_html else stop(kondisi_captcha(url))
   }, envir = globalenv())
   suppressMessages(main(c("--mode=url", paste0("--url-list=", daftar), paste0("--keluaran=", keluaran), "--jeda=0")))
-  expect_true(file.exists(file.path(keluaran, "antrean_tersisa.txt")))
+  expect_true(file.exists(file.path(keluaran, "antrean_tersisa.csv")))
   # Putaran 2: CAPTCHA hilang -> antrean dilanjutkan, berkas antrean dihapus.
   assign("ambil_html", function(url, cfg, folder_cache, pakai_cache = TRUE, ...) {
     diminta <<- c(diminta, id_putusan(url)); ov_html
   }, envir = globalenv())
   suppressMessages(main(c("--mode=url", paste0("--url-list=", daftar), paste0("--keluaran=", keluaran), "--jeda=0")))
   expect_true(all(c(strrep("c", 32), strrep("d", 32)) %in% diminta))
-  expect_false(file.exists(file.path(keluaran, "antrean_tersisa.txt")))
+  expect_false(file.exists(file.path(keluaran, "antrean_tersisa.csv")))
+})
+
+test_that("penyamaran nama tidak menghapus kata amar dan menangkap pola nama lain", {
+  amar <- "MENGADILI: 1. MENYATAKAN TERDAKWA TIDAK TERBUKTI SECARA SAH DAN MEYAKINKAN BERSALAH; 2. MEMBEBASKAN TERDAKWA OLEH KARENA ITU DARI SEMUA DAKWAAN PENUNTUT UMUM;"
+  expect_equal(samarkan_nama(amar), amar)
+  ov <- list(nomor = "1/Pid.Sus/2021/PN X", catatan_amar = sub("TERDAKWA TIDAK", "TERDAKWA AHMAD TIDAK", amar), tanggal_dibacakan = "3 Maret 2021")
+  expect_equal(rekap_putusan(ov)$hasil_putusan, "Tidak bersalah")
+  expect_equal(rekap_putusan(list(catatan_amar = "MELEPASKAN TERDAKWA OLEH KARENA ITU DARI SEGALA TUNTUTAN HUKUM"))$hasil_putusan, "Tidak bersalah")
+  expect_equal(samarkan_nama("Menyatakan Terdakwa AHMAD ZAILANI Bin (Alm) SUWARTO SUDARSO tersebut"), "Menyatakan Terdakwa [nama] tersebut")
+  expect_false(grepl("SUWARTO", samarkan_nama("dimintai tolong oleh Saksi SIGIT SUTRIYONO Bin (Alm)\nSUWARTO SUDARSO untuk")))
+  expect_equal(samarkan_nama("membeli solar dari Pandoli seharga Rp6.000"), "membeli solar dari [nama] seharga Rp6.000")
+  expect_equal(samarkan_nama("Nama lengkap : Syarif Syahrial; Tempat lahir : Padang"), "Nama lengkap : [nama]; Tempat lahir : Padang")
+  expect_false(grepl("ARIS|WADI|SUGIYARTO", samarkan_nama("ARIS WADI Als RIS dan Saksi\nSUGIYARTO Bin SUPARNO tersebut")))
+  expect_match(samarkan_nama("oleh Terdakwa\nM E N G A D I L I"), "M E N G A D I L I", fixed = TRUE)
+  expect_equal(samarkan_nama("dari Januari 2020 sampai Maret 2021 oleh Penuntut Umum"), "dari Januari 2020 sampai Maret 2021 oleh Penuntut Umum")
+  expect_equal(samarkan_nama("dibeli dari Sdr.Wongso dan dijual kepada Bapak Budi Santoso di Desa X"), "dibeli dari Sdr. [nama] dan dijual kepada Bapak [nama] di Desa X")
+})
+
+test_that("hasil dari amar yang dikutip, label subsidi", {
+  t <- paste("Membaca Putusan Pengadilan Negeri Jambi Nomor 512/Pid.Sus/", "LH/2022/PN Jmb tanggal 9 Januari 2023 sebagai berikut:",
+             "1. Menyatakan Terdakwa terbukti secara sah dan meyakinkan bersalah melakukan tindak pidana;", "Menimbang, bahwa banding",
+             "M E N G A D I L I", "Menguatkan putusan Pengadilan Negeri Jambi tersebut;", "Demikian diputuskan", sep = "\n")
+  expect_equal(hasil_dari_kutipan(t)[1], "Bersalah")
+  campur <- paste("membeli sebanyak 10.000 liter BBM jenis Solar non subsidi dari PT X sedangkan sisanya 2.000 liter solar subsidi;",
+                  "melakukan penyalahgunaan BBM yang disubsidi Pemerintah; menjual solar subsidi seolah-olah solar non subsidi")
+  expect_equal(barang_bbm(NA, campur), "Solar (subsidi)")
+  expect_equal(barang_bbm(NA, "minyak solar yang dibeli Terdakwa bukanlah minyak solar yang bersubsidi"), "Solar (non-subsidi)")
+  expect_equal(barang_bbm(NA, "Terdakwa bukan konsumen yang berhak atas BBM subsidi jenis solar"), "Solar (subsidi)")
+})
+
+test_that("volume: wadah x isi, kapasitas, total, satuan di dalam kurung, skor konteks", {
+  vb <- function(x) sum(volume_butir(x)$nilai)
+  expect_equal(vb("10 jerigen kapasitas masing-masing 35 liter berisi solar sebanyak 200 liter"), 200)
+  expect_equal(vb("1.200 (seribu dua ratus) botol masing-masing berisi 1 liter pertalite"), 1200)
+  expect_equal(vb("10 jeriken @ 30 liter solar"), 300)
+  expect_equal(vb("26 (dua puluh enam) jerigen berisi setiap 1 (satu) jerigen berisi 30 liter solar"), 780)
+  expect_equal(vb("3 (tiga) buah jerigen kapasitas isi 25 liter masing-  masing berisi solar sebanyak 25 liter"), 75)
+  expect_equal(vb(paste("± 4.500 liter BBM jenis Solar dimuat dalam 20 buah drum kapasitas 220 liter, yang masing-masing drum diisi",
+                        "sebanyak ± 220 liter BBM jenis Solar dan 1 buah drum yang dimuat sebanyak ± 100 liter")), 4500)
+  expect_equal(vb("10 (sepuluh) buah jerigen plastik kapasitas 20 liter yang berisi bahan bakar minyak jenis Pertalite"), 200)
+  expect_equal(vb("27 (dua puluh tujuh) jerigen ukuran 30 liter minyak jenis bio solar"), 810)
+  expect_equal(nrow(volume_butir("6 (enam) buah jerigen kosong isi 35 liter bekas solar")), 0)
+  expect_equal(vb("5 buah jerigen isi 35 liter yang berisikan premium sebanyak 155,585 liter"), 155.585)
+  expect_equal(vb("Sebanyak 560 liter Bio Solar, telah dilelang bersama-sama dengan perkara lain dengan total 695 (enam ratus sembilan puluh lima liter) solar"), 560)
+  expect_true(810 %in% volume_bbm("sebanyak 27 (dua puluh tujuh) Jerigen atau 810 (delapan ratus sepuluh liter) solar")$nilai)
+  nv <- function(x) nilai_volume(NA, x)$nilai
+  expect_equal(nv("solar sebanyak 16.000 liter disimpan dalam 4 (empat) kempu kapasitas masing-masing 1.000 liter"), 16000)
+  expect_equal(nv("membeli sebanyak 10.000 liter BBM jenis Solar non subsidi dari PT X sedangkan sisanya sebanyak 2.000 liter Terdakwa beli BBM jenis Solar Subsidi"), 2000)
+  expect_equal(nv(paste("4 (empat) Buah drum berisi 60 liter BBM jenis premium; Dirampas untuk dimusnahkan. Bahwa pada saat ditangkap",
+                        "terdakwa memproduksi total keseluruhan 1.210 liter BBM jenis premium")), 1210)
+  expect_equal(nv("Terdakwa memesan solar sebanyak 700 liter. Kemudian ditemukan solar sebanyak 200 liter di dalam jerigen"), 200)
+})
+
+test_that("nilai uang: harga per wadah, uang yang diserahkan, penjualan langsung, harga beli", {
+  j <- function(x) nominal_uang(x)$jenis[1]
+  expect_equal(j("BBM jenis Bio Solar dengan harga pergalon isi 30 liter seharga Rp420.000"), "harga_per_wadah")
+  expect_equal(j("Bio Solar oleh saksi satu jerigen isi 30 liter adalah seharga Rp200.000"), "harga_per_wadah")
+  expect_equal(j("untuk membeli dan mengangkut BBM. Yang mengangkut BBM tersebut adalah Terdakwa dengan memberikan uang sejumlah Rp10.000.000"), "lain")
+  expect_equal(j("solar 60.000 liter yang telah dilakukan penjualan langsung senilai Rp360.000.000"), "hasil_lelang")
+  expect_equal(j("telah dilakukan lelang secara bersama-sama dengan perkara lain dengan total hasil lelang Rp4.726.000"), "lain")
+  expect_equal(j("Print Out Bukti transfer pembelian BBM Solar senilai Rp25.000.000"), "lain")
+  t <- paste("solar yang terdakwa beli dari [nama] penyalur di Kecamatan Juwana Kabupaten Pati Provinsi Jawa Tengah dengan harga Rp6.300 per liter;",
+             "solar dijual kembali Rp6.500 per liter; dijual Rp6.500 per liter")
+  expect_equal(nilai_kerugian(t, list(nilai = 6000, satuan = "liter"))$nilai, 37800000)
+})
+
+test_that("overview tanpa PDF: relevansi, rantai perkara, judul Putusan Terkait", {
+  ov <- list(nomor = "25 K/PID.SUS-LH/2020", klasifikasi = "Pidana Khusus", kata_kunci = "Penyalahgunaan Pengangkutan Solar Bersubsidi",
+             catatan_amar = "Menolak permohonan kasasi dari Pemohon Kasasi/Penuntut Umum tersebut", tanggal_dibacakan = "3 Maret 2020",
+             url = "https://putusan3.mahkamahagung.go.id/direktori/putusan/abcdefabcdefabcdef.html")
+  expect_equal(rekap_putusan(ov, sumber_daftar = "putusan terkait")$relevan_bbm, "Ya")
+
+  pn <- rekap_putusan(list(), teks_pdf(file.path(DATA, "pdf", "266_Pid.Sus_2019_PN Pli.pdf")), "pdf/266.pdf")
+  skip_if(is.na(pn$nomor_putusan))
+  pn$url_putusan <- "https://putusan3.mahkamahagung.go.id/direktori/putusan/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.html"
+  pn$id_terkait <- "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  pt <- rekap_putusan(list(nomor = "10/PID.SUS/2020/PT BJM", klasifikasi = "Pidana Khusus Lain-lain", jenis_lembaga_peradilan = "PT",
+                           lembaga_peradilan = "PT BANJARMASIN", catatan_amar = "Menguatkan putusan Pengadilan Negeri Pelaihari tersebut",
+                           tanggal_dibacakan = "5 Mei 2020", lampiran_pdf = "Tidak ada",
+                           url = "https://putusan3.mahkamahagung.go.id/direktori/putusan/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.html"),
+                      sumber_daftar = "putusan terkait")
+  expect_equal(pt$relevan_bbm, "Tidak")
+  s <- lengkapi_rantai(bind_rows(pn, pt))
+  expect_equal(s$relevan_bbm[2], "Perlu dicek (putusan terkait BBM)")
+  expect_equal(s$hasil_putusan[2], "Bersalah")
+  expect_equal(s$barang_bbm[2], pn$barang_bbm)
+  expect_equal(s$nilai_kerugian_volume[2], "92")
+  expect_match(s$dasar_volume[2], "dari putusan terkait")
+  expect_equal(s$lokasi_kejadian[2], pn$lokasi_kejadian)
+
+  x <- read_file(file.path(FIX, "overview_pn.html")); u <- "https://putusan3.mahkamahagung.go.id/direktori/putusan/1102e1cfc840bf73da0c2c1af05872e7.html"
+  terkait <- function(h) id_putusan(parse_overview(h, u)$terkait)
+  cd <- c(strrep("c", 32), strrep("d", 32))
+  expect_setequal(terkait(sub("<h4>Putusan Terkait</h4>", "<h4>\n  <i class=\"icon\"></i> Putusan Terkait</h4>", x, fixed = TRUE)), cd)
+  expect_setequal(terkait(sub("<h4>Putusan Terkait</h4>", "<h4><span>Putusan</span> Terkait</h4>", x, fixed = TRUE)), cd)
+  expect_length(terkait(gsub('(?s)<div class="card-body">.*?</div>', '<div class="card-body"><p>Tidak ada putusan terkait</p></div>', x, perl = TRUE)), 0)
+})
+
+test_that("HTTP: 503 tanpa Retry-After diulang, 403 biasa bukan CAPTCHA, reCAPTCHA v3 bukan CAPTCHA, robots sekali", {
+  resp <- function(kode, isi = "", hdr = list()) structure(list(url = "u", status_code = kode, headers = httr:::insensitive(hdr),
+                                                                content = charToRaw(isi)), class = "response")
+  cfg <- modifyList(KONFIG, list(jeda_detik = 0, maks_coba = 3))
+  asli <- list(GET = if (exists("GET", envir = globalenv(), inherits = FALSE)) get("GET", envir = globalenv()) else NULL)
+  on.exit({ if (is.null(asli$GET)) rm("GET", envir = globalenv()) else assign("GET", asli$GET, envir = globalenv()) }, add = TRUE)
+  rm(list = ls(.robots_cache), envir = .robots_cache)
+  n <- c(robots = 0, lain = 0); antre_resp <- list()
+  assign("GET", function(url, ...) {
+    if (grepl("robots\\.txt$", url)) { n[["robots"]] <<- n[["robots"]] + 1; return(resp(404)) }
+    n[["lain"]] <<- n[["lain"]] + 1; r <- antre_resp[[1]]; antre_resp <<- antre_resp[-1]; r
+  }, envir = globalenv())
+  antre_resp <- list(resp(503), resp(200, "<html>ok</html>"))
+  expect_equal(status_code(minta("https://contoh.test/a.html", cfg)), 200)
+  expect_equal(n[["lain"]], 2)
+  antre_resp <- list(resp(403, "<html>Forbidden</html>"))
+  e <- tryCatch(minta("https://contoh.test/b.html", cfg), error = function(e) e)
+  expect_false(inherits(e, "captcha_error")); expect_match(conditionMessage(e), "HTTP 403")
+  antre_resp <- list(resp(403, "<title>Just a moment...</title><div id='cf-chl-widget'></div>"))
+  expect_error(minta("https://contoh.test/c.html", cfg), class = "captcha_error")
+  expect_equal(n[["robots"]], 1)
+  expect_false(mirip_captcha("<script src='https://www.google.com/recaptcha/api.js?render=abc'></script><td>Nomor</td>"))
+  expect_true(mirip_captcha("<div class=\"g-recaptcha\" data-sitekey=\"x\"></div>"))
+})
+
+test_that("lanjutan: PDF putusan terkait yang gagal diunduh diulang; sumber daftar asli tetap setelah CAPTCHA", {
+  pdf_contoh <- file.path(DATA, "pdf", "266_Pid.Sus_2019_PN Pli.pdf")
+  skip_if_not(file.exists(pdf_contoh))
+  ov_html <- read_file(file.path(FIX, "overview_pn.html"))
+  id_pn <- "1102e1cfc840bf73da0c2c1af05872e7"
+  varian <- function(id) if (identical(id, id_pn)) ov_html else gsub("249/Pid.Sus/2020/PN Spt", paste0("1/PID.SUS/2021/PT ", substr(id, 1, 1)), ov_html, fixed = TRUE)
+  asli <- list(ambil_html = ambil_html, unduh_pdf = unduh_pdf)
+  on.exit(for (k in names(asli)) assign(k, asli[[k]], envir = globalenv()), add = TRUE)
+  assign("ambil_html", function(url, cfg, folder_cache, pakai_cache = TRUE, ...) varian(id_putusan(url)), envir = globalenv())
+  gagal_c <- TRUE
+  # PT tiruan untuk id cccc... bernomor "1/PID.SUS/2021/PT c" -> berkas 1_PID.SUS_2021_PT_c.pdf
+  assign("unduh_pdf", function(url, tujuan, cfg) {
+    if (gagal_c && grepl("PT_c\\.pdf$", tujuan)) stop("HTTP 500")
+    dir.create(dirname(tujuan), recursive = TRUE, showWarnings = FALSE); file.copy(pdf_contoh, tujuan); tujuan
+  }, envir = globalenv())
+  keluaran <- tempfile("hasil_")
+  arg <- c("--mode=url", paste0("--url=https://putusan3.mahkamahagung.go.id/direktori/putusan/", id_pn, ".html"), paste0("--keluaran=", keluaran), "--jeda=0")
+  suppressMessages(main(arg))
+  s1 <- read_csv(file.path(keluaran, "semua_putusan_diperiksa.csv"), show_col_types = FALSE, col_types = cols(.default = "c"))
+  expect_equal(nrow(s1), 3)
+  expect_equal(s1$sumber_data[id_putusan(s1$url_putusan) == strrep("c", 32)], "Overview direktori")
+  gagal_c <- FALSE
+  suppressMessages(main(arg))
+  s2 <- read_csv(file.path(keluaran, "semua_putusan_diperiksa.csv"), show_col_types = FALSE, col_types = cols(.default = "c"))
+  expect_equal(nrow(s2), 3)
+  expect_equal(s2$sumber_data[id_putusan(s2$url_putusan) == strrep("c", 32)], "PDF putusan")
+  expect_equal(s2$sumber_daftar[id_putusan(s2$url_putusan) == strrep("c", 32)], "putusan terkait")
+
+  # Sumber daftar "pencarian: solar" tetap tercatat untuk putusan yang dilanjutkan dari antrean.
+  tanpa_bbm <- gsub("Pidana Khusus Migas", "Pidana Khusus", gsub("(?s)<a[^>]+download_file[^>]+>.*?</a>", "", ov_html, perl = TRUE))
+  tanpa_bbm <- gsub("(?i)solar|bbm|bahan bakar minyak|migas", "barang", tanpa_bbm, perl = TRUE)
+  ids <- c(strrep("a", 32), strrep("b", 32))
+  daftar <- tibble(id = ids, url = paste0("https://putusan3.mahkamahagung.go.id/direktori/putusan/", ids, ".html"),
+                   nomor = NA_character_, tanggal_putus = NA_character_, sumber_daftar = "pencarian: solar")
+  cfg <- modifyList(KONFIG, list(jeda_detik = 0, ikuti_terkait = FALSE))
+  k2 <- tempfile("hasil_"); dir.create(k2)
+  assign("ambil_html", function(url, cfg, folder_cache, pakai_cache = TRUE, ...) {
+    if (identical(id_putusan(url), ids[2])) stop(kondisi_captcha(url)) else gsub("249/Pid.Sus/2020/PN Spt", "7/Pid.Sus/2020/PN Spt", tanpa_bbm, fixed = TRUE)
+  }, envir = globalenv())
+  expect_error(suppressMessages(telusuri(daftar, cfg, k2)), class = "captcha_error")
+  expect_equal(read_csv(file.path(k2, "antrean_tersisa.csv"), show_col_types = FALSE)$sumber_daftar, "pencarian: solar")
+  assign("ambil_html", function(url, cfg, folder_cache, pakai_cache = TRUE, ...) gsub("249/Pid.Sus/2020/PN Spt", "8/Pid.Sus/2020/PN Spt", tanpa_bbm, fixed = TRUE), envir = globalenv())
+  s <- suppressMessages(telusuri(daftar[0, ], cfg, k2))
+  expect_equal(s$sumber_daftar, c("pencarian: solar", "pencarian: solar"))
+  expect_equal(s$relevan_bbm, c("Perlu dicek (tanpa PDF)", "Perlu dicek (tanpa PDF)"))
+  expect_false(file.exists(file.path(k2, "antrean_tersisa.csv")))
 })
