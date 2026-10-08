@@ -24,6 +24,65 @@ kriminal_bbm/                                     paket Python (penelusuran, eks
 tests/                                            uji otomatis (pytest)
 ```
 
+## Skrip R: scraping langsung dari situs MA
+
+`R/scrape_kriminalitas_bbm.R` adalah skrip R mandiri (satu berkas) untuk mencari putusan BBM di
+https://putusan3.mahkamahagung.go.id. Alurnya:
+
+1. kumpulkan URL putusan dari pencarian kata kunci (BBM, biosolar, solar, pertalite, minyak tanah, premium, ...) per
+   tahun 2020–2026, dari daftar klasifikasi Migas, dari halaman hasil pencarian yang disimpan, atau dari daftar URL;
+2. buka halaman overview tiap putusan;
+3. unduh PDF di bagian Lampiran bila ada, dan bila tidak ada pakai teks overview;
+4. tulis CSV.
+
+```r
+install.packages(c("httr", "rvest", "xml2", "pdftools", "stringr", "dplyr", "readr", "purrr"))
+```
+
+```bash
+Rscript R/scrape_kriminalitas_bbm.R --mode=cek            # uji cepat parser terhadap situs
+Rscript R/scrape_kriminalitas_bbm.R                       # pencarian kata kunci + klasifikasi Migas, 2020-2026
+Rscript R/scrape_kriminalitas_bbm.R --mode=url --url=https://putusan3.mahkamahagung.go.id/direktori/putusan/1b6b7ad93106cdda7a17bcacf6917d0c.html
+Rscript R/scrape_kriminalitas_bbm.R --mode=html --html-dir=hasil_pencarian_tersimpan   # bila pencarian meminta CAPTCHA
+Rscript R/scrape_kriminalitas_bbm.R --mode=pdf-lokal --pdf-dir="Data Kriminal BBM/pdf"  # dari PDF yang sudah ada
+```
+
+**Keluaran** ada di `hasil_scrape_R/`:
+
+- `rekap_kriminalitas_BBM_MA_2020_2026.csv`, berisi putusan relevan BBM dengan kolom:
+  1. `tahun_putusan`
+  2. `tahun_kejadian`
+  3. `tingkat_persidangan` (PN/PT/MA)
+  4. `hasil_putusan` (Bersalah/Tidak bersalah)
+  5. `lokasi_kejadian` (dari teks dakwaan; bila tidak ada, "Wilayah hukum PN ...")
+  6. `barang_bbm`
+  7. `nilai_kerugian_uang` + `mata_uang`
+  8. `nilai_kerugian_volume` + `satuan_volume`
+
+  Kolom pendukung: nomor, pengadilan, provinsi, dan kolom `dasar_*` yang berisi potongan teks sebagai jejak audit. Nilai
+  yang tidak ditemukan ditulis `NA`.
+- `semua_putusan_diperiksa.csv`, `daftar_url.csv`, `log_gagal.csv`, folder `pdf/` dan `cache_html/` (penelusuran bisa
+  dilanjutkan).
+
+Sopan terhadap situs: jeda 3 detik, retry, cache, dan robots.txt dipatuhi. Bila situs meminta CAPTCHA, skrip berhenti
+(tidak menembusnya) dan menyimpan antrean yang tersisa. Uji: `Rscript -e 'testthat::test_file("tests/R/test_scrape_kriminalitas_bbm.R")'`.
+
+**Tolok ukur ekstraksi otomatis** dibandingkan dengan rekap manual, pada 68 PDF yang dirujuk rekap
+(`tests/R/test_scrape_kriminalitas_bbm.R`):
+
+| Kolom | Terisi | Sama dengan rekap manual |
+|---|---|---|
+| tahun_putusan | 68/68 | 100% |
+| tingkat_persidangan | 67/68 | 100% |
+| hasil_putusan | 66/68 | 100% |
+| barang_bbm (jenis utama) | 68/68 | 98,5% |
+| tahun_kejadian | 46/68 | 91,3% |
+| nilai_kerugian_volume (±1%) | 61/68 | 70,5% |
+
+Volume dan nilai uang paling sering berbeda dari pengodean manual: barang bukti sering ditulis sebagai jumlah wadah ×
+ukuran, atau ada beberapa angka (dipesan vs. disita). Periksa kolom `dasar_volume` dan `dasar_nilai_uang` sebelum
+memakai angka itu untuk analisis.
+
 ## Instalasi
 
 Python 3.10 atau lebih baru.
